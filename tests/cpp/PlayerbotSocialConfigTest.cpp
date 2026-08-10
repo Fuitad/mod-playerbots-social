@@ -1,16 +1,18 @@
 #include <cstdlib>
 
 #include "Bot/Social/PlayerbotSocialConfig.h"
+#include "Config.h"
 
 int main()
 {
-    PlayerbotSocialConfigValues values;
-    values.socialChatEnable = true;
-    values.socialChatStage = "grounded_presence";
-    values.socialChatDensityMultiplierQuiet = 0.75f;
-    values.socialChatTelemetryRetentionHours = 72;
+    sConfigMgr->SetOption<bool>("PlayerbotsSocial.Enable", true);
+    sConfigMgr->SetOption<std::string>("PlayerbotsSocial.Stage", "grounded_presence");
+    sConfigMgr->SetOption<float>("PlayerbotsSocial.DensityMultiplier.Quiet", 0.75f);
+    sConfigMgr->SetOption<uint32>("PlayerbotsSocial.TelemetryRetentionHours", 72);
 
-    PlayerbotSocialConfigValues const loaded = NormalizePlayerbotSocialConfig(values);
+    ReloadPlayerbotSocialConfig();
+
+    PlayerbotSocialConfigValues const& loaded = sPlayerbotSocialConfig;
     if (!loaded.socialChatEnable || loaded.socialChatStage != "grounded_presence" ||
         loaded.socialChatDensityMultiplierQuiet != 0.75f || loaded.socialChatTelemetryRetentionHours != 72)
     {

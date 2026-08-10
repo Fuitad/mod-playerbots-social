@@ -1,8 +1,6 @@
 #include "Bot/Social/PlayerbotSocialConfig.h"
 
-#ifndef PLAYERBOTS_SOCIAL_STANDALONE
 #include "Config.h"
-#endif
 
 #include <cmath>
 #include <utility>
@@ -25,7 +23,6 @@ PlayerbotSocialConfigValues NormalizePlayerbotSocialConfig(PlayerbotSocialConfig
 
 void ReloadPlayerbotSocialConfig()
 {
-#ifndef PLAYERBOTS_SOCIAL_STANDALONE
     PlayerbotSocialConfigValues values;
     values.socialChatEnable = sConfigMgr->GetOption<bool>("PlayerbotsSocial.Enable", false);
     values.socialChatStage = sConfigMgr->GetOption<std::string>("PlayerbotsSocial.Stage", "human_replies");
@@ -42,5 +39,4 @@ void ReloadPlayerbotSocialConfig()
         sConfigMgr->GetOption<uint32>("PlayerbotsSocial.TelemetryRetentionHours", 48);
     values.socialChatControlToken = sConfigMgr->GetOption<std::string>("PlayerbotsSocial.ControlToken", "");
     sPlayerbotSocialConfig = NormalizePlayerbotSocialConfig(std::move(values));
-#endif
 }
