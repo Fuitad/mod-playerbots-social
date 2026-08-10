@@ -12,7 +12,8 @@ SET @social_event_reply_parent_exists := (
 );
 
 SET @ddl := IF(@social_event_reply_parent_exists = 0,
-  'ALTER TABLE `playerbot_social_event` ADD COLUMN `reply_to_event_public_id` CHAR(36) DEFAULT NULL AFTER `thread_public_id`;',
+  'ALTER TABLE `playerbot_social_event`
+    ADD COLUMN `reply_to_event_public_id` CHAR(36) DEFAULT NULL AFTER `thread_public_id`;',
   'SELECT "Column reply_to_event_public_id already exists.";'
 );
 

@@ -19,7 +19,8 @@ SET @social_event_source_exists := (
 );
 
 SET @ddl := IF(@social_event_source_exists = 0,
-  'ALTER TABLE `playerbot_social_event` ADD COLUMN `source_event_public_id` CHAR(36) DEFAULT NULL AFTER `reply_to_event_public_id`;',
+  'ALTER TABLE `playerbot_social_event`
+    ADD COLUMN `source_event_public_id` CHAR(36) DEFAULT NULL AFTER `reply_to_event_public_id`;',
   'SELECT "Column source_event_public_id already exists.";'
 );
 
@@ -36,7 +37,8 @@ SET @social_memory_source_event_exists := (
 );
 
 SET @ddl := IF(@social_memory_source_event_exists = 0,
-  'ALTER TABLE `playerbot_social_memory` ADD COLUMN `source_event_public_id` CHAR(36) DEFAULT NULL AFTER `privacy_scope`;',
+  'ALTER TABLE `playerbot_social_memory`
+    ADD COLUMN `source_event_public_id` CHAR(36) DEFAULT NULL AFTER `privacy_scope`;',
   'SELECT "Column source_event_public_id already exists.";'
 );
 
@@ -53,7 +55,8 @@ SET @social_memory_source_thread_exists := (
 );
 
 SET @ddl := IF(@social_memory_source_thread_exists = 0,
-  'ALTER TABLE `playerbot_social_memory` ADD COLUMN `source_thread_public_id` CHAR(36) DEFAULT NULL AFTER `source_event_public_id`;',
+  'ALTER TABLE `playerbot_social_memory`
+    ADD COLUMN `source_thread_public_id` CHAR(36) DEFAULT NULL AFTER `source_event_public_id`;',
   'SELECT "Column source_thread_public_id already exists.";'
 );
 
@@ -70,7 +73,9 @@ SET @social_memory_source_kind_exists := (
 );
 
 SET @ddl := IF(@social_memory_source_kind_exists = 0,
-  'ALTER TABLE `playerbot_social_memory` ADD COLUMN `source_kind` ENUM(''human_observation'', ''authoritative_source'') DEFAULT NULL AFTER `source_thread_public_id`;',
+  'ALTER TABLE `playerbot_social_memory`
+    ADD COLUMN `source_kind` ENUM(''human_observation'', ''authoritative_source'')
+    DEFAULT NULL AFTER `source_thread_public_id`;',
   'SELECT "Column source_kind already exists.";'
 );
 

@@ -33,7 +33,9 @@ SET @token_column_exists := (
 );
 
 SET @ddl := IF(@token_column_exists = 0,
-  'ALTER TABLE `playerbot_social_profile` ADD COLUMN `biography_request_token` BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT ''Identifies which request a completion answers; 0 means none is in flight'' AFTER `biography_state`;',
+  'ALTER TABLE `playerbot_social_profile`
+    ADD COLUMN `biography_request_token` BIGINT UNSIGNED NOT NULL DEFAULT 0
+    COMMENT ''Identifies which request a completion answers; 0 means none is in flight'' AFTER `biography_state`;',
   'SELECT "Column biography_request_token already exists.";'
 );
 
@@ -50,7 +52,10 @@ SET @attempted_column_exists := (
 );
 
 SET @ddl := IF(@attempted_column_exists = 0,
-  'ALTER TABLE `playerbot_social_profile` ADD COLUMN `biography_attempted_at` DATETIME DEFAULT NULL COMMENT ''When the last generation was attempted; both the retry backoff and the pending timeout measure from this'' AFTER `biography_request_token`;',
+  'ALTER TABLE `playerbot_social_profile`
+    ADD COLUMN `biography_attempted_at` DATETIME DEFAULT NULL
+    COMMENT ''When the last generation was attempted; both the retry backoff and the pending timeout measure from this''
+    AFTER `biography_request_token`;',
   'SELECT "Column biography_attempted_at already exists.";'
 );
 
