@@ -112,7 +112,8 @@ bool CombinedSeparatorIsAllowed(std::string const& normalizedMessage, PhraseMatc
     if (separatorEnd < separatorBegin)
         return false;
 
-    std::string_view separator(normalizedMessage.data() + separatorBegin, separatorEnd - separatorBegin);
+    std::string_view const separator =
+        std::string_view(normalizedMessage).substr(separatorBegin, separatorEnd - separatorBegin);
     std::size_t const first = separator.find_first_not_of(' ');
     if (first == std::string_view::npos)
         return true;
