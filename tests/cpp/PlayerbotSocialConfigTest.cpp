@@ -19,10 +19,10 @@ int main()
 
     PlayerbotSocialConfigValues const& loaded = sPlayerbotSocialConfig;
     if (!loaded.socialChatEnable || loaded.socialChatStage != "grounded_presence" ||
-        loaded.socialChatDensity != "lively" ||
-        loaded.socialChatDensityMultiplierQuiet != 0.75f || loaded.socialChatDensityMultiplierNormal != 1.25f ||
-        loaded.socialChatDensityMultiplierLively != 1.9f || loaded.socialChatGeneralStarterPressureMultiplier != 0.8f ||
-        loaded.socialChatTelemetryRetentionHours != 72 || loaded.socialChatControlToken != "test-control-token")
+        loaded.socialChatDensity != "lively" || loaded.socialChatDensityMultiplierQuiet != 0.75f ||
+        loaded.socialChatDensityMultiplierNormal != 1.25f || loaded.socialChatDensityMultiplierLively != 1.9f ||
+        loaded.socialChatGeneralStarterPressureMultiplier != 0.8f || loaded.socialChatTelemetryRetentionHours != 72 ||
+        loaded.socialChatControlToken != "test-control-token")
     {
         return EXIT_FAILURE;
     }

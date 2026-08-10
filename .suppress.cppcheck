@@ -1,1 +1,7 @@
 cppcheckError
+constVariableReference
+internalAstError:tests/cpp/PlayerbotSocialDeliveryTest.cpp
+returnByReference:src/Bot/Social/PlayerbotSocialMgr.h
+syntaxError:tests/cpp/PlayerbotSocialDeliveryTest.cpp
+uninitMemberVarNoCtor
+useStlAlgorithm

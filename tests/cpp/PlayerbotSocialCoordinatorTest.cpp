@@ -12,8 +12,8 @@
 #include <string_view>
 #include <vector>
 
-#include "Bot/Social/PlayerbotSocialMgr.h"
 #include "Bot/Social/PlayerbotSocialConfig.h"
+#include "Bot/Social/PlayerbotSocialMgr.h"
 #include "Bot/Social/PlayerbotSocialPromptContext.h"
 #include "Bot/Social/PlayerbotSocialProvider.h"
 #include "Bot/Social/PlayerbotSocialRoute.h"

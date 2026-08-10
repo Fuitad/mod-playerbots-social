@@ -1,9 +1,9 @@
 #include "Bot/Social/PlayerbotSocialConfig.h"
 
-#include "Config.h"
-
 #include <cmath>
 #include <utility>
+
+#include "Config.h"
 
 PlayerbotSocialConfigValues sPlayerbotSocialConfig;
 
