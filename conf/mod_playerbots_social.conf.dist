@@ -1,0 +1,24 @@
+[worldserver]
+
+# Enable interactive Playerbot social behavior. Default: 0
+PlayerbotsSocial.Enable = 0
+
+# Rollout stage. Supported values: human_replies, grounded_presence. Default: human_replies
+PlayerbotsSocial.Stage = human_replies
+
+# Conversation density profile. Supported values: quiet, normal, lively. Default: normal
+PlayerbotsSocial.Density = normal
+
+# Density multipliers. Invalid values fall back to the documented defaults.
+PlayerbotsSocial.DensityMultiplier.Quiet = 0.55
+PlayerbotsSocial.DensityMultiplier.Normal = 1.00
+PlayerbotsSocial.DensityMultiplier.Lively = 1.60
+
+# Pressure multiplier for autonomous General conversation starters. Default: 0.55
+PlayerbotsSocial.GeneralStarterPressureMultiplier = 0.55
+
+# Social event retention in hours. Values below the privacy floor are raised to the floor. Default: 48
+PlayerbotsSocial.TelemetryRetentionHours = 48
+
+# Administrative control secret. Empty or short values refuse all control requests. Default: empty
+PlayerbotsSocial.ControlToken = ""
