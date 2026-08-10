@@ -287,8 +287,7 @@ std::size_t PlayerbotSocialMemoryStore::Forget(uint64 characterGuidCounter)
 {
     std::size_t const before = _memories.size();
     _memories.erase(std::remove_if(_memories.begin(), _memories.end(),
-                                   [characterGuidCounter](PlayerbotSocialMemoryRecord const& record)
-                                   {
+                                   [characterGuidCounter](PlayerbotSocialMemoryRecord const& record) {
                                        return record.botGuidCounter == characterGuidCounter ||
                                               record.subjectGuidCounter == characterGuidCounter;
                                    }),
@@ -300,11 +299,11 @@ std::size_t PlayerbotSocialMemoryStore::Forget(uint64 characterGuidCounter)
 std::size_t PlayerbotSocialMemoryStore::ForgetOwnedByAnyOf(std::set<uint64> const& ownerGuidCounters)
 {
     std::size_t const before = _memories.size();
-    _memories.erase(
-        std::remove_if(_memories.begin(), _memories.end(),
-                       [&ownerGuidCounters](PlayerbotSocialMemoryRecord const& record)
-                       { return ownerGuidCounters.find(record.botGuidCounter) != ownerGuidCounters.end(); }),
-        _memories.end());
+    _memories.erase(std::remove_if(_memories.begin(), _memories.end(),
+                                   [&ownerGuidCounters](PlayerbotSocialMemoryRecord const& record) {
+                                       return ownerGuidCounters.find(record.botGuidCounter) != ownerGuidCounters.end();
+                                   }),
+                    _memories.end());
 
     return before - _memories.size();
 }

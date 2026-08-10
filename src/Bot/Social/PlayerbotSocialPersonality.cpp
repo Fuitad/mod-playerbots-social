@@ -486,8 +486,10 @@ namespace
 // list of biography fields; the whitelist, the assembler, and the validation all read it.
 struct BiographyField
 {
+    using Member = std::string PlayerbotBiography::*;
+
     std::string_view name;
-    std::string PlayerbotBiography::* member;
+    Member member;
 };
 
 constexpr BiographyField BIOGRAPHY_FIELDS[] = {{"origin", &PlayerbotBiography::origin},

@@ -922,8 +922,7 @@ void PlayerbotSocialMgr::PruneStaleThreads(uint64 nowUnixSeconds)
         }
 
         threads.erase(std::remove_if(threads.begin(), threads.end(),
-                                     [nowUnixSeconds](Thread const& thread)
-                                     {
+                                     [nowUnixSeconds](Thread const& thread) {
                                          return ElapsedSeconds(nowUnixSeconds, thread.lastActivityUnixSeconds) >
                                                 PLAYERBOT_SOCIAL_THREAD_STALE_SECONDS;
                                      }),
