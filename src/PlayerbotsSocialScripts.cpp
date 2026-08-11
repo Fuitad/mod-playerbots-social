@@ -132,6 +132,7 @@ void CaptureSocialListener(PlayerbotAI* botAI, Player* speaker, uint32 type, uin
     context.originatedFromSocialDelivery = originatedFromSocialDelivery;
     context.machineTraffic = language == LANG_ADDON;
     ChatChannelSource const source = botAI->GetChatChannelSource(bot, type, channelName);
+    context.functionalTraffic = PlayerbotSocialIsFunctionalTraffic(botAI, source, context.machineTraffic, message);
     PlayerbotSocialInboundDecision const decision = PlayerbotSocialRouteInbound(source, context, gate);
     PlayerbotSocialCaptureChat(botAI, decision, speaker->GetGUID(), language, message, context.eventPublicId,
                                sayCohortScopeId, replyToEventPublicId, sourceEventPublicId);

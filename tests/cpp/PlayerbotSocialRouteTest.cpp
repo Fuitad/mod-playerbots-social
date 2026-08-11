@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+#include "Bot/Engine/AiObjectContext.h"
+#include "Bot/PlayerbotMgr.h"
 #include "Bot/Social/PlayerbotSocialConfig.h"
 #include "Bot/Social/PlayerbotSocialPolicy.h"
 #include "Bot/Social/PlayerbotSocialRoute.h"
@@ -70,6 +72,50 @@ PlayerbotSocialInboundContext MachineTraffic()
     context.machineTraffic = true;
     return context;
 }
+
+PlayerbotSocialInboundContext FunctionalTraffic()
+{
+    PlayerbotSocialInboundContext context;
+    context.functionalTraffic = true;
+    return context;
+}
+
+class PlayerbotSocialFunctionalTrafficTest : public IntegrationTestFixture
+{
+protected:
+    void SetUp() override
+    {
+        IntegrationTestFixture::SetUp();
+
+        static bool contextsBuilt = false;
+        if (!contextsBuilt)
+        {
+            AiObjectContext::BuildAllSharedContexts();
+            contextsBuilt = true;
+        }
+
+        _restoreEnabled = sPlayerbotAIConfig.enabled;
+        sPlayerbotAIConfig.enabled = true;
+        _bot = CreateTestPlayer(790, "CommandBot");
+        sPlayerbotsMgr.AddPlayerbotData(_bot, true);
+        _botAI = sPlayerbotsMgr.GetPlayerbotAI(_bot);
+        ASSERT_NE(_botAI, nullptr);
+    }
+
+    void TearDown() override
+    {
+        delete _botAI;
+        _botAI = nullptr;
+        sPlayerbotAIConfig.enabled = _restoreEnabled;
+        IntegrationTestFixture::TearDown();
+    }
+
+    PlayerbotAI* _botAI = nullptr;
+
+private:
+    TestPlayer* _bot = nullptr;
+    bool _restoreEnabled = false;
+};
 
 // Every chat surface the module can resolve, so a routing claim covers the whole enum rather than
 // the handful of values a test happened to name.
@@ -509,6 +555,30 @@ TEST(PlayerbotSocialInboundRouteTest, AddonTrafficKeepsItsCommandPathAndNeverBec
         EXPECT_FALSE(decision.suppressLegacyReply)
             << "the caller still has to hand addon traffic to PlayerbotAI::HandleCommand";
     }
+}
+
+TEST(PlayerbotSocialInboundRouteTest, PlayerbotCommandsKeepTheirCommandPathAndNeverBecomeConversation)
+{
+    for (ChatChannelSource source : {ChatChannelSource::SRC_PARTY, ChatChannelSource::SRC_WHISPER})
+    {
+        PlayerbotSocialInboundDecision const decision =
+            PlayerbotSocialRouteInbound(source, FunctionalTraffic(), EnabledGate());
+
+        EXPECT_EQ(decision.route, PlayerbotSocialInboundRoute::LegacyOnly) << "source " << static_cast<int>(source);
+        EXPECT_FALSE(decision.suppressLegacyReply)
+            << "the caller still has to hand recognized commands to PlayerbotAI::HandleCommand";
+    }
+}
+
+TEST_F(PlayerbotSocialFunctionalTrafficTest, RealCommandResolutionAppliesOnlyToConversationalCommandSurfaces)
+{
+    for (ChatChannelSource source : {ChatChannelSource::SRC_PARTY, ChatChannelSource::SRC_WHISPER})
+        EXPECT_TRUE(PlayerbotSocialIsFunctionalTraffic(_botAI, source, false, "maintenance"));
+
+    EXPECT_FALSE(PlayerbotSocialIsFunctionalTraffic(_botAI, ChatChannelSource::SRC_WHISPER, false,
+                                                     "What are you doing?"));
+    EXPECT_FALSE(PlayerbotSocialIsFunctionalTraffic(_botAI, ChatChannelSource::SRC_SAY, false, "maintenance"));
+    EXPECT_FALSE(PlayerbotSocialIsFunctionalTraffic(_botAI, ChatChannelSource::SRC_WHISPER, true, "maintenance"));
 }
 
 TEST(PlayerbotSocialInboundRouteTest, WithTheGateOnTheBroadcastSurfacesStopProducingCannedReplies)

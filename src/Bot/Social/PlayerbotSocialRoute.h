@@ -169,6 +169,9 @@ struct PlayerbotSocialInboundDecision
  */
 [[nodiscard]] bool PlayerbotSocialChannelFromChatSource(ChatChannelSource source, PlayerbotSocialChannel& channel);
 
+[[nodiscard]] bool PlayerbotSocialIsFunctionalTraffic(PlayerbotAI* botAI, ChatChannelSource source,
+                                                       bool machineTraffic, std::string const& message);
+
 /*
  * What the router needs to know about the moment a message arrived, as opposed to the surface it
  * arrived on. These facts belong to the message or listening bot rather than to the channel, and all
@@ -188,6 +191,9 @@ struct PlayerbotSocialInboundContext
 
     // True for LANG_ADDON protocol payloads. Commands still consume them, but Social never does.
     bool machineTraffic = false;
+
+    // True for a Playerbot command recognized without executing it. The command path still owns it.
+    bool functionalTraffic = false;
 };
 
 [[nodiscard]] PlayerbotSocialInboundDecision PlayerbotSocialRouteInbound(ChatChannelSource source,

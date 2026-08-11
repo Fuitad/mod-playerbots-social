@@ -20,6 +20,7 @@
 #include "ChannelMgr.h"
 #include "DBCStores.h"
 #include "DBCStructure.h"
+#include "ExternalEventHelper.h"
 #include "Group.h"
 #include "Map.h"
 #include "ObjectAccessor.h"
@@ -388,13 +389,24 @@ bool PlayerbotSocialChannelFromChatSource(ChatChannelSource source, PlayerbotSoc
     }
 }
 
+bool PlayerbotSocialIsFunctionalTraffic(PlayerbotAI* botAI, ChatChannelSource source, bool machineTraffic,
+                                        std::string const& message)
+{
+    if (machineTraffic || botAI == nullptr ||
+        (source != ChatChannelSource::SRC_PARTY && source != ChatChannelSource::SRC_WHISPER))
+        return false;
+
+    AiObjectContext* const aiContext = botAI->GetAiObjectContext();
+    return aiContext != nullptr && ExternalEventHelper(aiContext).IsChatCommand(message);
+}
+
 PlayerbotSocialInboundDecision PlayerbotSocialRouteInbound(ChatChannelSource source,
                                                            PlayerbotSocialInboundContext const& context,
                                                            PlayerbotSocialGate const& gate)
 {
     PlayerbotSocialInboundDecision decision;
 
-    if (!gate.enabled || context.machineTraffic)
+    if (!gate.enabled || context.machineTraffic || context.functionalTraffic)
         return decision;
 
     PlayerbotSocialChannel channel = PlayerbotSocialChannel::General;
