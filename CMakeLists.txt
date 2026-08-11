@@ -16,6 +16,13 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   target_compile_definitions(playerbots_social_tests PRIVATE PLAYERBOTS_SOCIAL_STANDALONE)
   target_compile_options(playerbots_social_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
   add_test(NAME playerbots_social_tests COMMAND playerbots_social_tests)
+
+  add_executable(playerbots_social_content_tests
+    tests/cpp/PlayerbotSocialContentTest.cpp
+    src/Bot/Social/PlayerbotSocialContent.cpp)
+  target_include_directories(playerbots_social_content_tests PRIVATE src)
+  target_compile_options(playerbots_social_content_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  add_test(NAME playerbots_social_content_tests COMMAND playerbots_social_content_tests)
 else()
   if(NOT EXISTS "${CMAKE_SOURCE_DIR}/modules/mod-playerbots/src/Bot/PlayerbotAI.h")
     message(FATAL_ERROR "mod-playerbots-social requires mod-playerbots")

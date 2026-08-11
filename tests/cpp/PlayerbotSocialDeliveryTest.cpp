@@ -12,11 +12,11 @@
 #include <tuple>
 #include <vector>
 
+#include "Bot/Social/PlayerbotSocialContent.h"
 #include "Bot/Social/PlayerbotSocialMgr.h"
 #include "Bot/Social/PlayerbotSocialPromptContext.h"
 #include "Bot/Social/PlayerbotSocialProvider.h"
 #include "Bot/Social/PlayerbotSocialRoute.h"
-#include "VanillaOnlyRules.h"
 #include "gtest/gtest.h"
 
 namespace
@@ -3336,7 +3336,7 @@ TEST(PlayerbotSocialRoleplayDeliveryTest, TheComposedContextCarriesTheWorldserve
     EXPECT_EQ(provider.submittedContexts[3].promptMode, PlayerbotRoleplayPromptMode::AuthorizedRoleplay);
 
     for (PlayerbotSocialRequestContext const& context : provider.submittedContexts)
-        EXPECT_EQ(context.activeContentExpansion, VanillaOnlyRules::ActiveContentExpansion());
+        EXPECT_EQ(context.activeContentExpansion, PlayerbotSocialActiveContentExpansion());
 
     for (std::size_t at = 0; at < 3; ++at)
         EXPECT_NE(provider.submittedContexts[at].fictionalIdentity.request, PlayerbotFictionalIdentityRequest::None)
@@ -3349,13 +3349,9 @@ TEST(PlayerbotSocialRoleplayDeliveryTest, TheComposedContextCarriesTheWorldserve
     coordinator.SetSocialProvider(nullptr);
 }
 
-TEST(PlayerbotSocialRoleplayDeliveryTest, AuthorizedDeliveryRejectsLockedContentBeforeItIsSpoken)
+TEST(PlayerbotSocialRoleplayDeliveryTest, AuthorizedDeliveryAllowsRecognizedWrathContent)
 {
-    PlayerbotSocialMgr coordinator;
-    RecordingProvider provider;
-    coordinator.SetSocialProvider(&provider);
-
-    std::vector<std::string> const lockedLines = {
+    std::vector<std::string> const wrathLines = {
         "In Outland we would feast tonight!",
         "I, a proud blood elf, greet thee.",
         "The Sin'dorei remember.",
@@ -3369,59 +3365,68 @@ TEST(PlayerbotSocialRoleplayDeliveryTest, AuthorizedDeliveryRejectsLockedContent
     };
 
     uint64 now = 1000;
-    for (std::string const& locked : lockedLines)
+    for (std::string const& line : wrathLines)
     {
+        PlayerbotSocialMgr coordinator;
+        RecordingProvider provider;
+        coordinator.SetSocialProvider(&provider);
+
         now += 10;
         uint64 const token =
             OpenModedRequest(coordinator, 500 + now, PlayerbotRoleplayPromptMode::AuthorizedRoleplay, now);
         ASSERT_NE(token, 0u);
 
-        PlayerbotSocialProviderResult result = Message(locked, PlayerbotSocialChannel::Whisper);
+        PlayerbotSocialProviderResult result = Message(line, PlayerbotSocialChannel::Whisper);
         result.requestToken = token;
         ASSERT_EQ(coordinator.AcceptSocialResult(result, now * 1000, 3), PlayerbotSocialDeliveryRejection::None);
 
         PlayerbotSocialDeliveryConditions conditions = AllHold();
-        EXPECT_EQ(coordinator.CompleteDelivery(token, conditions),
-                  PlayerbotSocialDeliveryRejection::LockedRoleplayContent)
-            << "line: " << locked;
+        EXPECT_EQ(coordinator.CompleteDelivery(token, conditions), PlayerbotSocialDeliveryRejection::None)
+            << "line: " << line;
+        coordinator.SetSocialProvider(nullptr);
     }
 
-    // The same text on an ordinary result is also blocked, with a distinct diagnostic.
+    // The same expansion content is valid in an ordinary result on a Wrath server.
+    PlayerbotSocialMgr coordinator;
+    RecordingProvider provider;
+    coordinator.SetSocialProvider(&provider);
     uint64 const ordinaryToken = OpenModedRequest(coordinator, 499, PlayerbotRoleplayPromptMode::Ordinary);
     ASSERT_NE(ordinaryToken, 0u);
     PlayerbotSocialProviderResult ordinary = Message("Northrend will open one day", PlayerbotSocialChannel::Whisper);
     ordinary.requestToken = ordinaryToken;
     ASSERT_EQ(coordinator.AcceptSocialResult(ordinary, 5000000, 3), PlayerbotSocialDeliveryRejection::None);
-    EXPECT_EQ(coordinator.CompleteDelivery(ordinaryToken, AllHold()),
-              PlayerbotSocialDeliveryRejection::LockedProgressionContent);
+    EXPECT_EQ(coordinator.CompleteDelivery(ordinaryToken, AllHold()), PlayerbotSocialDeliveryRejection::None);
 
     coordinator.SetSocialProvider(nullptr);
 }
 
-TEST(PlayerbotSocialRoleplayDeliveryTest, OrdinaryDeliveryRejectsProgressionLockedGameplayClaims)
+TEST(PlayerbotSocialRoleplayDeliveryTest, OrdinaryDeliveryAllowsWrathProgressionLanguage)
 {
-    PlayerbotSocialMgr coordinator;
-    RecordingProvider provider;
-    coordinator.SetSocialProvider(&provider);
-
-    std::vector<std::string> const lockedLines = {"yeah for sure, been grinding heroics all week",
-                                                  "finally hit 80, time to start grinding tier pieces"};
+    std::vector<std::string> const wrathLines = {"yeah for sure, been grinding heroics all week",
+                                                 "finally hit 80, time to start grinding tier pieces"};
 
     uint64 botGuid = 700;
-    for (std::string const& locked : lockedLines)
+    for (std::string const& line : wrathLines)
     {
+        PlayerbotSocialMgr coordinator;
+        RecordingProvider provider;
+        coordinator.SetSocialProvider(&provider);
+
         uint64 const token = OpenModedRequest(coordinator, botGuid++, PlayerbotRoleplayPromptMode::Ordinary);
         ASSERT_NE(token, 0u);
 
-        PlayerbotSocialProviderResult result = Message(locked, PlayerbotSocialChannel::Whisper);
+        PlayerbotSocialProviderResult result = Message(line, PlayerbotSocialChannel::Whisper);
         result.requestToken = token;
         ASSERT_EQ(coordinator.AcceptSocialResult(result, 1000000, 3), PlayerbotSocialDeliveryRejection::None);
 
-        PlayerbotSocialDeliveryRejection const rejection = coordinator.CompleteDelivery(token, AllHold());
-        EXPECT_STREQ(PlayerbotSocialDeliveryRejectionName(rejection), "locked_progression_content")
-            << "line: " << locked;
+        EXPECT_EQ(coordinator.CompleteDelivery(token, AllHold()), PlayerbotSocialDeliveryRejection::None)
+            << "line: " << line;
+        coordinator.SetSocialProvider(nullptr);
     }
 
+    PlayerbotSocialMgr coordinator;
+    RecordingProvider provider;
+    coordinator.SetSocialProvider(&provider);
     uint64 const validToken = OpenModedRequest(coordinator, botGuid, PlayerbotRoleplayPromptMode::Ordinary);
     ASSERT_NE(validToken, 0u);
     PlayerbotSocialProviderResult valid = Message("still questing around Dun Morogh", PlayerbotSocialChannel::Whisper);

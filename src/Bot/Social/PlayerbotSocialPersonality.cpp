@@ -10,8 +10,8 @@
 #include <cctype>
 #include <iterator>
 
+#include "Bot/Social/PlayerbotSocialContent.h"
 #include "Log.h"
-#include "VanillaOnlyRules.h"
 
 namespace
 {
@@ -722,10 +722,9 @@ PlayerbotBiographyValidation PlayerbotPersonality::ValidateBiography(PlayerbotBi
         if (ContainsForbiddenClaim(value))
             return Reject(PlayerbotBiographyRejection::ForbiddenClaim);
 
-        for (VanillaOnlyRules::RoleplayContentCapability const capability :
-             VanillaOnlyRules::DetectRoleplayContentCapabilities(value))
+        for (PlayerbotSocialContentCapability const capability : PlayerbotSocialDetectContentCapabilities(value))
         {
-            if (!VanillaOnlyRules::IsRoleplayContentAllowed(capability))
+            if (!PlayerbotSocialContentIsAllowed(capability))
                 return Reject(PlayerbotBiographyRejection::LockedProgressionContent);
         }
     }

@@ -14,11 +14,11 @@
 #include <string>
 #include <vector>
 
+#include "Bot/Social/PlayerbotSocialContent.h"
 #include "Bot/Social/PlayerbotSocialFictionalIdentity.h"
 #include "Bot/Social/PlayerbotSocialPersonality.h"
 #include "Bot/Social/PlayerbotSocialPolicy.h"
 #include "Bot/Social/PlayerbotSocialRepository.h"
-#include "VanillaOnlyRules.h"
 
 // One line of a conversation being offered for extraction, as the coordinator holds it.
 //
@@ -604,7 +604,7 @@ struct PlayerbotSocialRoleplayAssessmentResult
 {
     uint64 assessmentToken = 0;
     PlayerbotRoleplayAssessmentKind kind = PlayerbotRoleplayAssessmentKind::Ordinary;
-    std::vector<VanillaOnlyRules::RoleplayContentCapability> capabilities;
+    std::vector<PlayerbotSocialContentCapability> capabilities;
 };
 
 /*
@@ -614,9 +614,9 @@ struct PlayerbotSocialRoleplayAssessmentResult
  * else is malformed and must resolve to ordinary behavior, never to authorization.
  */
 [[nodiscard]] inline bool PlayerbotSocialRoleplayAssessmentShapeIsValid(
-    PlayerbotRoleplayAssessmentKind kind, std::vector<VanillaOnlyRules::RoleplayContentCapability> const& capabilities)
+    PlayerbotRoleplayAssessmentKind kind, std::vector<PlayerbotSocialContentCapability> const& capabilities)
 {
-    using Capability = VanillaOnlyRules::RoleplayContentCapability;
+    using Capability = PlayerbotSocialContentCapability;
 
     switch (kind)
     {

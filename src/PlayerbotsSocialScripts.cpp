@@ -71,6 +71,11 @@ PlayerbotSocialStarterSource SocialStarterSource(PlayerbotEvent const& event)
 class PlayerbotsSocialExtension final : public PlayerbotExtension
 {
 public:
+    bool HandleRemoteCommand(std::string_view command, std::string& response) override
+    {
+        return PlayerbotSocialControlHandleLine(command, response);
+    }
+
     bool HandleBotEvent(PlayerbotAI* botAI, PlayerbotEvent const& event) override
     {
         PlayerbotSocialGate const gate = PlayerbotSocialEffectiveGate();
@@ -83,6 +88,15 @@ public:
         }
 
         return true;
+    }
+
+    void OnBotPurge(std::vector<std::uint32_t> const& botGuids) override
+    {
+        std::vector<uint64> cohort;
+        cohort.reserve(botGuids.size());
+        for (std::uint32_t guid : botGuids)
+            cohort.push_back(guid);
+        sPlayerbotSocialMgr.ForgetBotCohort(cohort);
     }
 };
 
@@ -239,7 +253,7 @@ public:
                                                       &replyToEventPublicId, &sourceEventPublicId);
         PlayerbotSocialDispatchScope const dispatch;
         for (auto const& [guid, listener] : ObjectAccessor::GetPlayers())
-            if (IsSocialBotListener(listener) && channel->IsOn(listener->GetGUID()))
+            if (IsSocialBotListener(listener) && listener->IsInChannel(channel))
                 CaptureSocialListener(GET_PLAYERBOT_AI(listener), player, type, language, message, channel->GetName(),
                                       delivered, eventPublicId, gate, 0, replyToEventPublicId, sourceEventPublicId);
         return true;

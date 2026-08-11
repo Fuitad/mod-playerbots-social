@@ -4718,7 +4718,7 @@ PlayerbotSocialRequestContext PlayerbotSocialMgr::ComposeRequestContextForSubjec
      */
     context.promptMode =
         PlayerbotRoleplayPromptModeIsValid(promptMode) ? promptMode : PlayerbotRoleplayPromptMode::Ordinary;
-    context.activeContentExpansion = VanillaOnlyRules::ActiveContentExpansion();
+    context.activeContentExpansion = PlayerbotSocialActiveContentExpansion();
 
     PlayerbotSocialPromptContextConsent const consents = [this](uint64 guid) { return !IsOptedOut(guid); };
     if (!statelessDirectReply)
@@ -5220,10 +5220,10 @@ PlayerbotSocialDeliveryRejection PlayerbotSocialMgr::CompleteDelivery(
     // prompt reduces bad generations, but the worldserver remains the final delivery authority.
     if (verdict == PlayerbotSocialDeliveryRejection::None)
     {
-        for (VanillaOnlyRules::RoleplayContentCapability const capability :
-             VanillaOnlyRules::DetectRoleplayContentCapabilities(pending->second.result.text))
+        for (PlayerbotSocialContentCapability const capability :
+             PlayerbotSocialDetectContentCapabilities(pending->second.result.text))
         {
-            if (!VanillaOnlyRules::IsRoleplayContentAllowed(capability))
+            if (!PlayerbotSocialContentIsAllowed(capability))
             {
                 verdict = pending->second.authorizedRoleplay
                               ? PlayerbotSocialDeliveryRejection::LockedRoleplayContent
@@ -5612,12 +5612,11 @@ PlayerbotSocialAssessmentApplication PlayerbotSocialMgr::ApplyRoleplayAssessment
              * The whole premise is all or nothing: one locked, unknown, or contradictory item in
              * the union refuses roleplay entirely.
              */
-            std::vector<VanillaOnlyRules::RoleplayContentCapability> premise = result.capabilities;
+            std::vector<PlayerbotSocialContentCapability> premise = result.capabilities;
 
             auto const unionDetected = [&premise](std::string const& text)
             {
-                for (VanillaOnlyRules::RoleplayContentCapability const capability :
-                     VanillaOnlyRules::DetectRoleplayContentCapabilities(text))
+                for (PlayerbotSocialContentCapability const capability : PlayerbotSocialDetectContentCapabilities(text))
                     if (std::find(premise.begin(), premise.end(), capability) == premise.end())
                         premise.push_back(capability);
             };
@@ -5627,7 +5626,7 @@ PlayerbotSocialAssessmentApplication PlayerbotSocialMgr::ApplyRoleplayAssessment
                  AssessmentThreadLines(pending.threadPublicId, pending.activation.nowUnixSeconds))
                 unionDetected(line);
 
-            directive.roleplayEligible = VanillaOnlyRules::IsRoleplayContentAllowed(premise);
+            directive.roleplayEligible = PlayerbotSocialContentIsAllowed(premise);
             if (!directive.roleplayEligible)
                 LOG_DEBUG("playerbots",
                           "Social roleplay premise refused by the active progression policy for "

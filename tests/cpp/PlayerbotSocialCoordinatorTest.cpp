@@ -13,11 +13,11 @@
 #include <vector>
 
 #include "Bot/Social/PlayerbotSocialConfig.h"
+#include "Bot/Social/PlayerbotSocialContent.h"
 #include "Bot/Social/PlayerbotSocialMgr.h"
 #include "Bot/Social/PlayerbotSocialPromptContext.h"
 #include "Bot/Social/PlayerbotSocialProvider.h"
 #include "Bot/Social/PlayerbotSocialRoute.h"
-#include "VanillaOnlyRules.h"
 #include "gtest/gtest.h"
 
 namespace
@@ -2641,9 +2641,8 @@ uint64 RoleplaySeedThatAnswers(PlayerbotSocialActivation activation, int wantWil
     return 0;
 }
 
-PlayerbotSocialRoleplayAssessmentResult AssessedAs(
-    uint64 token, PlayerbotRoleplayAssessmentKind kind,
-    std::vector<VanillaOnlyRules::RoleplayContentCapability> capabilities = {})
+PlayerbotSocialRoleplayAssessmentResult AssessedAs(uint64 token, PlayerbotRoleplayAssessmentKind kind,
+                                                   std::vector<PlayerbotSocialContentCapability> capabilities = {})
 {
     PlayerbotSocialRoleplayAssessmentResult result;
     result.assessmentToken = token;
@@ -2975,7 +2974,7 @@ TEST(PlayerbotSocialCoordinatorTest, AnUnansweredAssessmentExpiresThroughTheWorl
 TEST(PlayerbotSocialCoordinatorTest, AssessmentShapeMatrixIsStrict)
 {
     using Kind = PlayerbotRoleplayAssessmentKind;
-    using Capability = VanillaOnlyRules::RoleplayContentCapability;
+    using Capability = PlayerbotSocialContentCapability;
 
     // ordinary, practical, and opt_out require an empty set.
     for (Kind kind : {Kind::Ordinary, Kind::Practical, Kind::OptOut})
@@ -3415,10 +3414,11 @@ RoleplayCase RoleplayCaseFor(PlayerbotSocialThreadHandle const& thread, std::str
 // Runs one full assess-and-apply cycle for a single candidate and returns the application.
 // Pending deliveries from an earlier cycle are released first: one bot cannot owe two replies
 // to the same thread, and these tests re-select the same bot on purpose.
-PlayerbotSocialAssessmentApplication AssessedCycle(
-    PlayerbotSocialMgr& coordinator, PlayerbotSocialThreadHandle const& thread, uint64 now, std::string_view line,
-    RoleplayCase const& roleplayCase, PlayerbotRoleplayAssessmentKind kind,
-    std::vector<VanillaOnlyRules::RoleplayContentCapability> capabilities)
+PlayerbotSocialAssessmentApplication AssessedCycle(PlayerbotSocialMgr& coordinator,
+                                                   PlayerbotSocialThreadHandle const& thread, uint64 now,
+                                                   std::string_view line, RoleplayCase const& roleplayCase,
+                                                   PlayerbotRoleplayAssessmentKind kind,
+                                                   std::vector<PlayerbotSocialContentCapability> capabilities)
 {
     coordinator.CancelPendingDeliveries();
     coordinator.ApplyConsentSnapshot(900, false);
@@ -3499,7 +3499,7 @@ TEST(PlayerbotRoleplayDecisionTest, AValidInvitationAssignsModesByBandAndWilling
 
         PlayerbotSocialAssessmentApplication const application = AssessedCycle(
             coordinator, thread, now, line, roleplayCase, PlayerbotRoleplayAssessmentKind::RoleplayInvitation,
-            {VanillaOnlyRules::RoleplayContentCapability::ClassicContent});
+            {PlayerbotSocialContentCapability::ClassicContent});
 
         EXPECT_EQ(SoleMode(application), expectation.expected)
             << "band " << static_cast<uint32>(expectation.band) << " wantPass " << expectation.wantPass;
@@ -3530,7 +3530,7 @@ TEST(PlayerbotRoleplayDecisionTest, AContinuationAuthorizesOnlyActiveParticipant
     ASSERT_NE(active.guid, 0u);
     ASSERT_EQ(SoleMode(AssessedCycle(coordinator, thread, 1010, "join my tale?", active,
                                      PlayerbotRoleplayAssessmentKind::RoleplayInvitation,
-                                     {VanillaOnlyRules::RoleplayContentCapability::ClassicContent})),
+                                     {PlayerbotSocialContentCapability::ClassicContent})),
               PlayerbotRoleplayPromptMode::AuthorizedRoleplay);
 
     // The active participant may continue when its willingness roll passes again.
@@ -3545,7 +3545,7 @@ TEST(PlayerbotRoleplayDecisionTest, AContinuationAuthorizesOnlyActiveParticipant
     RoleplayCase const activeContinues{active.guid, continuationSeed, active.affinity};
     EXPECT_EQ(SoleMode(AssessedCycle(coordinator, thread, 1020, "the tale goes on", activeContinues,
                                      PlayerbotRoleplayAssessmentKind::RoleplayContinuation,
-                                     {VanillaOnlyRules::RoleplayContentCapability::ClassicContent})),
+                                     {PlayerbotSocialContentCapability::ClassicContent})),
               PlayerbotRoleplayPromptMode::AuthorizedRoleplay);
 
     // A receptive bot that never joined cannot be authorized by a continuation, however willing.
@@ -3561,7 +3561,7 @@ TEST(PlayerbotRoleplayDecisionTest, AContinuationAuthorizesOnlyActiveParticipant
 
     EXPECT_EQ(SoleMode(AssessedCycle(coordinator, thread, 1030, "and on it goes", bystander,
                                      PlayerbotRoleplayAssessmentKind::RoleplayContinuation,
-                                     {VanillaOnlyRules::RoleplayContentCapability::ClassicContent})),
+                                     {PlayerbotSocialContentCapability::ClassicContent})),
               PlayerbotRoleplayPromptMode::AcknowledgeRoleplay);
 
     coordinator.SetSocialProvider(nullptr);
@@ -3583,7 +3583,7 @@ TEST(PlayerbotRoleplayDecisionTest, PracticalExitsRoleplayAndOptOutBlocksTheThre
     ASSERT_NE(joiner.guid, 0u);
     ASSERT_EQ(SoleMode(AssessedCycle(coordinator, thread, 1010, "come roleplay", joiner,
                                      PlayerbotRoleplayAssessmentKind::RoleplayInvitation,
-                                     {VanillaOnlyRules::RoleplayContentCapability::ClassicContent})),
+                                     {PlayerbotSocialContentCapability::ClassicContent})),
               PlayerbotRoleplayPromptMode::AuthorizedRoleplay);
     ASSERT_FALSE(coordinator.RoleplayParticipants(thread.publicId).empty());
 
@@ -3600,7 +3600,7 @@ TEST(PlayerbotRoleplayDecisionTest, PracticalExitsRoleplayAndOptOutBlocksTheThre
     coordinator.Observe(Saying(GeneralZone(1), 900, true, 1030, "come roleplay again"));
     ASSERT_EQ(SoleMode(AssessedCycle(coordinator, thread, 1030, "come roleplay again", joiner,
                                      PlayerbotRoleplayAssessmentKind::RoleplayInvitation,
-                                     {VanillaOnlyRules::RoleplayContentCapability::ClassicContent})),
+                                     {PlayerbotSocialContentCapability::ClassicContent})),
               PlayerbotRoleplayPromptMode::AuthorizedRoleplay);
 
     // An explicit opt out clears the roleplay AND blocks this speaker for the thread's lifetime.
@@ -3613,29 +3613,28 @@ TEST(PlayerbotRoleplayDecisionTest, PracticalExitsRoleplayAndOptOutBlocksTheThre
 
     // While opted out, a later invitation from that human resolves to ordinary behavior.
     coordinator.Observe(Saying(GeneralZone(1), 900, true, 1050, "actually, roleplay with me"));
-    PlayerbotSocialAssessmentApplication const blocked =
-        AssessedCycle(coordinator, thread, 1050, "actually, roleplay with me", joiner,
-                      PlayerbotRoleplayAssessmentKind::RoleplayInvitation,
-                      {VanillaOnlyRules::RoleplayContentCapability::ClassicContent});
+    PlayerbotSocialAssessmentApplication const blocked = AssessedCycle(
+        coordinator, thread, 1050, "actually, roleplay with me", joiner,
+        PlayerbotRoleplayAssessmentKind::RoleplayInvitation, {PlayerbotSocialContentCapability::ClassicContent});
     EXPECT_EQ(SoleMode(blocked), PlayerbotRoleplayPromptMode::Ordinary);
     EXPECT_TRUE(coordinator.RoleplayParticipants(thread.publicId).empty());
 
     coordinator.SetSocialProvider(nullptr);
 }
 
-TEST(PlayerbotRoleplayDecisionTest, EveryLockedCapabilityRefusesTheWholePremise)
+TEST(PlayerbotRoleplayDecisionTest, EveryRecognizedWrathCapabilityCanAuthorizeThePremise)
 {
-    using Capability = VanillaOnlyRules::RoleplayContentCapability;
+    using Capability = PlayerbotSocialContentCapability;
 
     PlayerbotSocialMgr coordinator;
     RoleplayAssessmentProvider provider;
     coordinator.SetSocialProvider(&provider);
 
     PlayerbotSocialThreadHandle const thread =
-        coordinator.Observe(Saying(GeneralZone(1), 900, true, 1000, "a locked tale"));
+        coordinator.Observe(Saying(GeneralZone(1), 900, true, 1000, "a Wrath era tale"));
     ASSERT_TRUE(thread.valid);
 
-    std::vector<std::vector<Capability>> const lockedPremises = {
+    std::vector<std::vector<Capability>> const supportedPremises = {
         {Capability::Outland},
         {Capability::BloodElf},
         {Capability::Draenei},
@@ -3648,10 +3647,10 @@ TEST(PlayerbotRoleplayDecisionTest, EveryLockedCapabilityRefusesTheWholePremise)
     };
 
     uint64 now = 1000;
-    for (std::vector<Capability> const& premise : lockedPremises)
+    for (std::vector<Capability> const& premise : supportedPremises)
     {
         now += 10;
-        std::string const line = "locked line " + std::to_string(now);
+        std::string const line = "supported line " + std::to_string(now);
         coordinator.Observe(Saying(GeneralZone(1), 900, true, now, line));
 
         RoleplayCase const eager = RoleplayCaseFor(thread, line, now, PlayerbotRoleplayAffinityBand::Enthusiast, 1);
@@ -3660,15 +3659,15 @@ TEST(PlayerbotRoleplayDecisionTest, EveryLockedCapabilityRefusesTheWholePremise)
         PlayerbotSocialAssessmentApplication const application = AssessedCycle(
             coordinator, thread, now, line, eager, PlayerbotRoleplayAssessmentKind::RoleplayInvitation, premise);
 
-        EXPECT_EQ(SoleMode(application), PlayerbotRoleplayPromptMode::Ordinary)
+        EXPECT_EQ(SoleMode(application), PlayerbotRoleplayPromptMode::AuthorizedRoleplay)
             << "premise starting with capability " << static_cast<uint32>(premise[0]);
-        EXPECT_TRUE(coordinator.RoleplayParticipants(thread.publicId).empty());
+        EXPECT_FALSE(coordinator.RoleplayParticipants(thread.publicId).empty());
     }
 
     coordinator.SetSocialProvider(nullptr);
 }
 
-TEST(PlayerbotRoleplayDecisionTest, AClassicOmissionCannotAuthorizeProtectedIndicators)
+TEST(PlayerbotRoleplayDecisionTest, AClassifierOmissionCannotAuthorizeContradictoryIndicators)
 {
     PlayerbotSocialMgr coordinator;
     RoleplayAssessmentProvider provider;
@@ -3699,7 +3698,7 @@ TEST(PlayerbotRoleplayDecisionTest, AClassicOmissionCannotAuthorizeProtectedIndi
         // indicator scan must still refuse authorization.
         PlayerbotSocialAssessmentApplication const application =
             AssessedCycle(coordinator, thread, now, line, eager, PlayerbotRoleplayAssessmentKind::RoleplayInvitation,
-                          {VanillaOnlyRules::RoleplayContentCapability::ClassicContent});
+                          {PlayerbotSocialContentCapability::ClassicContent});
 
         EXPECT_EQ(SoleMode(application), PlayerbotRoleplayPromptMode::Ordinary) << "line: " << line;
         EXPECT_TRUE(coordinator.RoleplayParticipants(thread.publicId).empty()) << "line: " << line;
@@ -3730,7 +3729,7 @@ TEST(PlayerbotRoleplayDecisionTest, OrdinaryAndUncertainResultsKeepOrdinaryModes
     coordinator.Observe(Saying(GeneralZone(1), 900, true, 1020, "hmm was that an invitation?"));
     EXPECT_EQ(SoleMode(AssessedCycle(coordinator, thread, 1020, "hmm was that an invitation?", eager,
                                      PlayerbotRoleplayAssessmentKind::Uncertain,
-                                     {VanillaOnlyRules::RoleplayContentCapability::Unknown})),
+                                     {PlayerbotSocialContentCapability::Unknown})),
               PlayerbotRoleplayPromptMode::Ordinary);
 
     EXPECT_TRUE(coordinator.RoleplayParticipants(thread.publicId).empty());

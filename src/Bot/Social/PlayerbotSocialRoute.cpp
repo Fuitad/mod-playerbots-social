@@ -125,7 +125,7 @@ PlayerbotSocialGroundingEnvelope CaptureCurrentGroundingEnvelope(Player* bot, Pl
     PlayerbotSocialGroundingInput input;
     input.bot = CaptureCharacterFacts(bot);
     input.evidenceScope = PlayerbotSocialChannelPrivacyScope(channel);
-    input.activeContentExpansion = VanillaOnlyRules::ActiveContentExpansion();
+    input.activeContentExpansion = PlayerbotSocialActiveContentExpansion();
     input.nowUnixSeconds = nowUnixSeconds;
     CaptureGroundingRelations(input, bot, participant);
     return PlayerbotSocialBuildGroundingEnvelope(input);
@@ -142,7 +142,7 @@ PlayerbotSocialGroundingEnvelope CaptureGroundingEnvelope(Player* bot, Player* p
     input.profileLoadState = profileLoadState;
     input.memoryInputState = sPlayerbotSocialMgr.MemoryInputStateFor(input.bot.guidCounter, channel);
     input.evidenceScope = PlayerbotSocialChannelPrivacyScope(channel);
-    input.activeContentExpansion = VanillaOnlyRules::ActiveContentExpansion();
+    input.activeContentExpansion = PlayerbotSocialActiveContentExpansion();
     input.nowUnixSeconds = nowUnixSeconds;
     input.transcriptEventPublicIds = sPlayerbotSocialMgr.RecentEventIdsOf(thread);
     Player* groundingParticipant = participant;
@@ -218,7 +218,7 @@ std::vector<PlayerbotSocialNearbySnapshotEntry> CaptureNearbySnapshot(Player con
             {
                 Channel* const joined = channelEntry.second;
                 if (joined != nullptr && joined->GetChannelId() == ChatChannelId::GENERAL &&
-                    joined->IsOn(candidate->GetGUID()))
+                    candidate->IsInChannel(joined))
                 {
                     facts.channelMember = true;
                     break;
@@ -1537,7 +1537,7 @@ bool PlayerbotSocialQueueStarterSource(PlayerbotAI* sourceAI, PlayerbotSocialSta
                 {
                     Channel* const joined = channelEntry.second;
                     if (joined != nullptr && joined->GetChannelId() == ChatChannelId::GENERAL &&
-                        joined->IsOn(candidate->GetGUID()))
+                        candidate->IsInChannel(joined))
                     {
                         generalAudienceGuidCounter = guid.GetCounter();
                         break;
