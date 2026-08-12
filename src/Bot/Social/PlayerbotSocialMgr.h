@@ -1639,6 +1639,13 @@ public:
     bool NoteWhisperStarterAttempt(PlayerbotSocialRelationshipKey const& key, uint64 nowUnixSeconds,
                                    uint64 cooldownSeconds);
 
+    /*
+     * Un-stamps a pair whose check-in never opened a request (a budget refusal, a full queue), so
+     * the next scan retries instead of the pair resting its whole cooldown over nothing. The stamp
+     * must mean "a whisper happened", never "a whisper was considered".
+     */
+    void ClearWhisperStarterAttempt(PlayerbotSocialRelationshipKey const& key);
+
     PlayerbotSocialRelationshipValues ApplyRelationshipDelta(uint64 botGuidCounter, uint64 subjectGuidCounter,
                                                              PlayerbotSocialRelationshipValues const& delta,
                                                              uint64 nowUnixSeconds);

@@ -371,6 +371,15 @@ enum class PlayerbotSocialBudgetDecision : uint8
     bool continuation = false);
 
 /*
+ * Whether a request may draw the continuation reserve: any reply (its empty starter subject is
+ * what marks it), and anything on the whisper channel. The one whisper starter is the
+ * relationship check-in, paced by its per-pair cooldown and one-per-scan cadence, so it can never
+ * flood the reserve the way ambient starters flood the bucket; at the starter floor it simply
+ * lost the admission race to that flood on every scan.
+ */
+[[nodiscard]] bool PlayerbotSocialProviderCallDrawsReserve(PlayerbotSocialChannel channel, bool starterSubjectEmpty);
+
+/*
  * The state of one inferred thread, as values. Counters rather than history: the coordinator keeps
  * bounded identities and participant state, and nothing here can outlive the character it describes.
  */

@@ -1701,6 +1701,35 @@ TEST(PlayerbotSocialDeliveryTest, APublicReplyKeepsTheSpeakerAsContextWithoutMak
         << "the context still carries the responder's directional relationship with the speaker";
 }
 
+TEST(PlayerbotSocialDeliveryTest, ASayReplyRevalidatesAgainstTheSpeakerItAnswers)
+{
+    /*
+     * A say thread's scope id is a cohort-registry counter, not a zone, so the targetless
+     * revalidation branch (zone == scopeId) can never hold and every targetless say reply died as
+     * different_map on live. The speaker the reply answers IS the conversation's location on /say,
+     * so it travels as the delivery target and the spatial revalidation runs against them, exactly
+     * as a say starter revalidates against its perceivable audience.
+     */
+    PlayerbotSocialMgr coordinator;
+    RecordingProvider provider;
+    coordinator.SetSocialProvider(&provider);
+
+    GroundedThreadFixture const fixture = OpenGroundedThread(coordinator, PlayerbotSocialChannel::Say);
+    PlayerbotSocialDeliveryRejection rejection = PlayerbotSocialDeliveryRejection::None;
+    uint64 const token = coordinator.BeginSocialRequest(
+        500, StoredPersonality(), 0, PlayerbotSocialChannel::Say, fixture.thread.publicId,
+        PlayerbotSocialRequestPriority::DirectHumanEngagement, 1000, REQUEST_ZONE_ID, std::string(), rejection, {},
+        900, true, fixture.currentLine, false, PlayerbotRoleplayPromptMode::Ordinary, fixture.grounding);
+    ASSERT_NE(token, 0u);
+
+    ASSERT_EQ(provider.submittedTargets.size(), 1u);
+    EXPECT_EQ(provider.submittedTargets[0], 900u);
+
+    PlayerbotSocialPendingDelivery stored;
+    ASSERT_TRUE(coordinator.PendingDeliveryFor(token, stored));
+    EXPECT_EQ(stored.targetGuidCounter, 900u) << "the speaker is the say reply's revalidation anchor";
+}
+
 // Activation: an observed message becomes a request ------------------------------------------------
 
 namespace

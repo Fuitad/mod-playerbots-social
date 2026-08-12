@@ -4016,7 +4016,13 @@ bool PlayerbotSocialMgr::NoteWhisperStarterAttempt(PlayerbotSocialRelationshipKe
     }
 
     _whisperStarterAttempts[key] = nowUnixSeconds;
+
     return true;
+}
+
+void PlayerbotSocialMgr::ClearWhisperStarterAttempt(PlayerbotSocialRelationshipKey const& key)
+{
+    _whisperStarterAttempts.erase(key);
 }
 
 PlayerbotSocialRelationshipValues PlayerbotSocialMgr::ApplyRelationshipDelta(
@@ -5206,7 +5212,7 @@ uint64 PlayerbotSocialMgr::BeginSocialRequest(
      * may draw the reserved bottom of the bucket; a starter (its subject is what marks it) stops
      * above the reserve, so the starter flood can never silence the conversations it opens.
      */
-    if (!AdmitProviderCall(nowUnixSeconds, starterSubject.empty()))
+    if (!AdmitProviderCall(nowUnixSeconds, PlayerbotSocialProviderCallDrawsReserve(channel, starterSubject.empty())))
     {
         rejection = PlayerbotSocialDeliveryRejection::BudgetExhausted;
         return 0;
@@ -5330,6 +5336,18 @@ uint64 PlayerbotSocialMgr::BeginSocialRequest(
         rejection = PlayerbotSocialDeliveryRejection::QueueReservedForPlayers;
         return 0;
     }
+
+    /*
+     * A say reply anchors its delivery revalidation on the speaker it answers. A say thread's
+     * scope id is a cohort-registry counter rather than a zone, so the targetless revalidation
+     * branch (zone == scope) can never hold and every targetless say reply died as different_map
+     * on live. On /say the speaker IS the conversation's location, so the spatial revalidation
+     * runs against them, exactly as a say starter revalidates against its perceivable audience.
+     * General replies stay targetless: their scope is the zone, and the room check is correct.
+     */
+    if (targetGuidCounter == 0 && channel == PlayerbotSocialChannel::Say && starterSubject.empty() &&
+        currentLine.speakerGuidCounter != 0)
+        targetGuidCounter = currentLine.speakerGuidCounter;
 
     PlayerbotSocialPendingDelivery pending;
     pending.requestToken = _nextRequestToken++;

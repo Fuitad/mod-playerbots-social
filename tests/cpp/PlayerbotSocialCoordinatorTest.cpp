@@ -2931,6 +2931,26 @@ TEST(PlayerbotSocialCoordinatorTest, APerceivableStarterCarriesItsAudienceToTheP
     coordinator.SetSocialProvider(nullptr);
 }
 
+TEST(PlayerbotSocialCoordinatorTest, ARefusedWhisperCheckInDoesNotBurnThePairCooldown)
+{
+    /*
+     * The pump stamps the pair BEFORE activating (so cheap refusals stay cheap), and both live
+     * whisper attempts died on the budget with the stamp already written, silencing each warm
+     * pair for six hours over a refusal that the very next 30-second scan could have retried.
+     * Clearing the stamp when no request opened is what makes the stamp mean "a whisper
+     * happened" rather than "a whisper was considered".
+     */
+    PlayerbotSocialMgr coordinator;
+    PlayerbotSocialRelationshipKey const key{500, 900};
+
+    ASSERT_TRUE(coordinator.NoteWhisperStarterAttempt(key, 1000, 21600));
+    EXPECT_FALSE(coordinator.NoteWhisperStarterAttempt(key, 1030, 21600)) << "the stamp itself must hold";
+
+    coordinator.ClearWhisperStarterAttempt(key);
+    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt(key, 1030, 21600))
+        << "a cleared pair may retry on the next scan";
+}
+
 TEST(PlayerbotSocialCoordinatorTest, APreloadedWarmRelationshipIsVisibleToTheWhisperScan)
 {
     /*

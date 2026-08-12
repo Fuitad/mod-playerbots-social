@@ -329,6 +329,11 @@ PlayerbotSocialBudgetDecision PlayerbotSocialGovernProviderCall(PlayerbotSocialP
                : PlayerbotSocialBudgetDecision::Refused;
 }
 
+bool PlayerbotSocialProviderCallDrawsReserve(PlayerbotSocialChannel channel, bool starterSubjectEmpty)
+{
+    return starterSubjectEmpty || channel == PlayerbotSocialChannel::Whisper;
+}
+
 float PlayerbotSocialNormalizeDensityMultiplier(float value, float fallback)
 {
     float const usableFallback = std::isfinite(fallback) && fallback > 0.0f ? fallback : 1.0f;

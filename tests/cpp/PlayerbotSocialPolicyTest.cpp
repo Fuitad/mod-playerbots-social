@@ -958,6 +958,24 @@ TEST(PlayerbotSocialPressureTest, ReplyPressureTurnDecayIsConfigurablePerThread)
     EXPECT_GE(soft, 0.2f);
 }
 
+TEST(PlayerbotSocialBudgetTest, WhisperCheckInsDrawTheContinuationReserve)
+{
+    /*
+     * The relationship check-in is a starter, so at the starter admission floor it raced the
+     * ambient flood every 30-second scan and lost: both live whisper attempts died as
+     * budget_exhausted within a minute of restart. It may draw the reserve because it cannot
+     * flood it: the per-pair cooldown and the one-per-scan cadence bound whispers to a trickle,
+     * while ambient starters stay above the reserve.
+     */
+    EXPECT_TRUE(PlayerbotSocialProviderCallDrawsReserve(PlayerbotSocialChannel::Whisper, false));
+    EXPECT_TRUE(PlayerbotSocialProviderCallDrawsReserve(PlayerbotSocialChannel::Whisper, true));
+    EXPECT_TRUE(PlayerbotSocialProviderCallDrawsReserve(PlayerbotSocialChannel::General, true));
+    EXPECT_TRUE(PlayerbotSocialProviderCallDrawsReserve(PlayerbotSocialChannel::Say, true));
+    EXPECT_FALSE(PlayerbotSocialProviderCallDrawsReserve(PlayerbotSocialChannel::General, false));
+    EXPECT_FALSE(PlayerbotSocialProviderCallDrawsReserve(PlayerbotSocialChannel::Say, false));
+    EXPECT_FALSE(PlayerbotSocialProviderCallDrawsReserve(PlayerbotSocialChannel::Party, false));
+}
+
 TEST(PlayerbotSocialPressureTest, BotOnlyContinuationBaseLiftsEarlyTurnsWithoutTouchingHumanThreads)
 {
     /*

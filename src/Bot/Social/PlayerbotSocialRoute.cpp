@@ -2013,7 +2013,16 @@ void PlayerbotSocialPumpWhisperStarters()
             PlayerbotPersonality::SplitMix64(thread.threadId ^ (nowUnixSeconds << 1) ^ key.scopeId);
         activation.candidates = {candidate};
 
-        sPlayerbotSocialMgr.Activate(activation, gate.density);
+        PlayerbotSocialActivationResult const result = sPlayerbotSocialMgr.Activate(activation, gate.density);
+
+        /*
+         * A check-in that never opened a request must not burn the pair's cooldown: the stamp
+         * means "a whisper happened", and a budget refusal at 30-second scan cadence is exactly
+         * what the next scan should retry. Both live whisper attempts died this way, silencing
+         * each warm pair for six hours over a refusal.
+         */
+        if (result.openedTokens.empty())
+            sPlayerbotSocialMgr.ClearWhisperStarterAttempt(pair.key);
 
         // One check-in per scan, server-wide. Occasional is the contract, and the per-pair cooldown
         // above makes the next scan pick a different pair rather than this one again.
