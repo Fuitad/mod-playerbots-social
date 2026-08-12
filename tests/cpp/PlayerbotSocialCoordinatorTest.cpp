@@ -2931,6 +2931,37 @@ TEST(PlayerbotSocialCoordinatorTest, APerceivableStarterCarriesItsAudienceToTheP
     coordinator.SetSocialProvider(nullptr);
 }
 
+TEST(PlayerbotSocialCoordinatorTest, AReplyCarriesItsGroundedParticipantToTheProvider)
+{
+    /*
+     * A reply grounds against the speaker it answers, so its envelope names that speaker as a
+     * Participant. The provider refuses Participant evidence whose subject did not travel on the
+     * request, and the delivery target must stay zero for a room reply because delivery
+     * revalidates a zero target against the thread's scope rather than against one character.
+     * The wire subject therefore travels independently, read from the envelope itself. Every say
+     * and general reply died as provider_failed on live without this, which is why no bot-only
+     * thread could ever grow past its opening line.
+     */
+    PlayerbotSocialMgr coordinator;
+    RoleplayAssessmentProvider provider;
+    coordinator.SetSocialProvider(&provider);
+    coordinator.ApplyConsentSnapshot(900, false);
+
+    PlayerbotSocialThreadHandle const thread =
+        coordinator.Observe(Saying(GeneralZone(12), 900, true, 1000, "did anyone clear the mine?"));
+    PlayerbotSocialActivation activation = RoleplayOpportunity(thread, 1000, "did anyone clear the mine?");
+    activation.selectionSeed = RoleplaySeedThatAnswers(activation);
+    ASSERT_NE(activation.selectionSeed, 0u);
+
+    PlayerbotSocialActivationResult const result =
+        coordinator.Activate(activation, PlayerbotSocialDensityProfile::Normal);
+
+    ASSERT_EQ(result.openedTokens.size(), 1u);
+    ASSERT_FALSE(provider.submittedTargets.empty());
+    EXPECT_EQ(provider.submittedTargets.front(), 900u);
+    coordinator.SetSocialProvider(nullptr);
+}
+
 TEST(PlayerbotSocialCoordinatorTest, AReactiveRequestWithoutAnObservationParentIsRefused)
 {
     PlayerbotSocialMgr coordinator;

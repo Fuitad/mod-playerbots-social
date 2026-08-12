@@ -5327,8 +5327,28 @@ uint64 PlayerbotSocialMgr::BeginSocialRequest(
         nearby, addressedDirectly, currentLine, statelessDirectReply, promptMode);
     context.grounding = grounding;
 
-    if (!_provider->Submit(pending.requestToken, botGuidCounter, targetGuidCounter, channel, threadPublicId, priority,
-                           context))
+    /*
+     * The wire subject the provider validates Participant evidence against. It is the delivery
+     * target when one travels (a whisper, a perceivable starter's audience), and otherwise the
+     * participant the grounding envelope itself names: a reply grounds against the speaker it
+     * answers, but its delivery target must stay zero because a room reply is revalidated against
+     * the thread's scope rather than against one character. Reading the envelope rather than
+     * reusing subjectGuidCounter is deliberate: a General starter carries an audience it cannot
+     * perceive, and that audience must not travel as a participant the prompt would describe as
+     * present. Without this every say and general reply carried Participant evidence with no
+     * subject and died as provider_failed before a prompt was ever built.
+     */
+    uint64 wireSubjectGuidCounter = targetGuidCounter;
+    if (wireSubjectGuidCounter == 0)
+        for (PlayerbotSocialEvidenceEntry const& entry : grounding.entries)
+            if (entry.subjectRole == PlayerbotSocialEvidenceSubjectRole::Participant)
+            {
+                wireSubjectGuidCounter = entry.subjectGuidCounter;
+                break;
+            }
+
+    if (!_provider->Submit(pending.requestToken, botGuidCounter, wireSubjectGuidCounter, channel, threadPublicId,
+                           priority, context))
     {
         if (bot->second.empty())
             _pendingDeliveries.erase(bot);

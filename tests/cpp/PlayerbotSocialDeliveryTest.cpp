@@ -80,6 +80,25 @@ PlayerbotSocialGroundingEnvelope Grounding(uint32 level = 32, std::string zone =
     return PlayerbotSocialBuildGroundingEnvelope(input);
 }
 
+/*
+ * A room-addressed envelope, matching what the route builds for a General starter: the audience is
+ * not perceivable there, so no Participant evidence travels and the request rightly carries no
+ * wire subject.
+ */
+PlayerbotSocialGroundingEnvelope RoomGrounding()
+{
+    PlayerbotSocialGroundingInput input;
+    input.nowUnixSeconds = 1000;
+    input.profileLoadState = PlayerbotSocialProfileLoadState::Loaded;
+    input.memoryInputState = PlayerbotSocialMemoryInputState::Loaded;
+    input.evidenceScope = PlayerbotSocialPrivacyScope::Public;
+    input.bot.guidCounter = 500;
+    input.bot.name = "Barnek";
+    input.bot.level = 32;
+    input.bot.zone = "Elwynn Forest";
+    return PlayerbotSocialBuildGroundingEnvelope(input);
+}
+
 std::string EvidenceId(PlayerbotSocialGroundingEnvelope const& grounding, PlayerbotSocialEvidenceFactKind fact)
 {
     auto const found = std::find_if(
@@ -934,9 +953,12 @@ uint64 OpenStarterRequest(PlayerbotSocialMgr& coordinator, uint64 bot, uint64 ta
                           std::string const& threadPublicId, PlayerbotSocialRequestPriority priority, uint64 now,
                           PlayerbotSocialDeliveryRejection& rejection, std::string starterSubject = "fixture subject")
 {
+    // A starter with no travelling target grounds room-addressed, exactly as the route builds it:
+    // Participant evidence may only appear when its subject travels on the request.
     return coordinator.BeginSocialRequest(bot, StoredPersonality(), target, channel, threadPublicId, priority, now,
                                           REQUEST_ZONE_ID, std::move(starterSubject), rejection, {}, target,
-                                          target != 0, {}, false, PlayerbotRoleplayPromptMode::Ordinary, Grounding());
+                                          target != 0, {}, false, PlayerbotRoleplayPromptMode::Ordinary,
+                                          target != 0 ? Grounding() : RoomGrounding());
 }
 
 struct GroundedThreadFixture
@@ -1655,15 +1677,25 @@ TEST(PlayerbotSocialDeliveryTest, APublicReplyKeepsTheSpeakerAsContextWithoutMak
 
     GroundedThreadFixture const fixture = OpenGroundedThread(coordinator, PlayerbotSocialChannel::General);
     PlayerbotSocialDeliveryRejection rejection = PlayerbotSocialDeliveryRejection::None;
-    ASSERT_NE(
-        coordinator.BeginSocialRequest(
-            500, StoredPersonality(), 0, PlayerbotSocialChannel::General, fixture.thread.publicId,
-            PlayerbotSocialRequestPriority::DirectHumanEngagement, 1000, REQUEST_ZONE_ID, std::string(), rejection, {},
-            900, true, fixture.currentLine, false, PlayerbotRoleplayPromptMode::Ordinary, fixture.grounding),
-        0u);
+    uint64 const token = coordinator.BeginSocialRequest(
+        500, StoredPersonality(), 0, PlayerbotSocialChannel::General, fixture.thread.publicId,
+        PlayerbotSocialRequestPriority::DirectHumanEngagement, 1000, REQUEST_ZONE_ID, std::string(), rejection, {},
+        900, true, fixture.currentLine, false, PlayerbotRoleplayPromptMode::Ordinary, fixture.grounding);
+    ASSERT_NE(token, 0u);
 
+    /*
+     * The two halves of "who this line is for" travel separately. The grounded speaker rides as the
+     * wire subject, because the provider refuses Participant evidence whose subject did not travel.
+     * The DELIVERY target stays zero: a General line is revalidated against its room's scope, and a
+     * stored target would make it read as a private reply.
+     */
     ASSERT_EQ(provider.submittedTargets.size(), 1u);
-    EXPECT_EQ(provider.submittedTargets[0], 0u) << "General still delivers to the room";
+    EXPECT_EQ(provider.submittedTargets[0], 900u) << "the grounded speaker must travel as the wire subject";
+
+    PlayerbotSocialPendingDelivery stored;
+    ASSERT_TRUE(coordinator.PendingDeliveryFor(token, stored));
+    EXPECT_EQ(stored.targetGuidCounter, 0u) << "General still delivers to the room";
+
     ASSERT_EQ(provider.submittedContexts.size(), 1u);
     EXPECT_FALSE(provider.submittedContexts[0].relationship.empty())
         << "the context still carries the responder's directional relationship with the speaker";
@@ -2328,7 +2360,8 @@ TEST(PlayerbotSocialDeliveryTest, AStarterIsOwnedByTheBotThatSuppliedTheAuthorit
     candidate.botGuidCounter = 500;
     candidate.personality = StoredPersonality();
     candidate.profileLoadState = PlayerbotSocialProfileLoadState::Loaded;
-    candidate.grounding = Grounding();
+    // Room-addressed like every real General starter: no Participant evidence, no wire subject.
+    candidate.grounding = RoomGrounding();
     candidate.effectiveDisposition = 100;
     candidate.contentRelevance = 100;
     activation.candidates.push_back(candidate);
