@@ -592,6 +592,29 @@ TEST(PlayerbotSocialEligibilityTest, AThirdConsecutiveBotTurnIsRejectedBeforePro
     EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(continuation), PlayerbotSocialOpportunityRejection::BotOnlyTurnLimit);
 }
 
+TEST(PlayerbotSocialEligibilityTest, AStarterIsNeverRejectedForThreadStaleness)
+{
+    /*
+     * Staleness protects replies from answering a conversation that ended; a starter is new speech
+     * about a quiet scope, and the quieter the scope the MORE the ambient cadence wants the line.
+     * The starter's own subject freshness is enforced where the contexts age out, not here.
+     */
+    PlayerbotSocialOpportunity starter = EligibleReplyOpportunity();
+    starter.starter = true;
+    starter.speakerIsHuman = false;
+    starter.threadLastActivityUnixSeconds = 0;
+    starter.nowUnixSeconds = 1000 + PLAYERBOT_SOCIAL_THREAD_STALE_SECONDS * 10;
+    starter.botLastSpokeUnixSeconds = 0;
+
+    EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(starter), PlayerbotSocialOpportunityRejection::None);
+
+    // A reply to the same silence stays refused: nobody is waiting on an answer to a dead thread.
+    PlayerbotSocialOpportunity reply = starter;
+    reply.starter = false;
+    reply.speakerIsHuman = true;
+    EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(reply), PlayerbotSocialOpportunityRejection::ThreadStale);
+}
+
 TEST(PlayerbotSocialEligibilityTest, AWhisperStarterIsAdmittedOnlyWhenRelationshipDriven)
 {
     // Whisper stays reactive for every spontaneous starter; the one whisper a bot may open is the

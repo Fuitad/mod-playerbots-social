@@ -1960,6 +1960,26 @@ TEST(PlayerbotSocialBudgetWiringTest, TheCoordinatorRulesProviderCallsThroughThe
     sPlayerbotSocialConfig.socialChatProviderHourlyBudget = saved;
 }
 
+TEST(PlayerbotSocialConversationTest, AScopeRemembersWhenAnyoneLastActuallySpoke)
+{
+    /*
+     * The ambient fill measures scope SILENCE, which is a different clock from a thread's coherence
+     * stamp: the starter pump touches threads on every pass, so anchoring the fill to thread
+     * activity pinned starter pressure at the floor forever. Only an observed real line moves this.
+     */
+    PlayerbotSocialMgr coordinator;
+
+    EXPECT_EQ(coordinator.ScopeLastSpokenAt(GeneralZone(9)), 0u);
+
+    coordinator.Observe(Saying(GeneralZone(9), 500, false, 1234, "the mine is quiet today"));
+    EXPECT_EQ(coordinator.ScopeLastSpokenAt(GeneralZone(9)), 1234u);
+
+    // Opening a starter thread is the pump LOOKING at the scope, not anyone speaking in it.
+    PlayerbotSocialThreadHandle const opened = coordinator.OpenStarterThread(GeneralZone(9), 2000);
+    ASSERT_TRUE(opened.valid);
+    EXPECT_EQ(coordinator.ScopeLastSpokenAt(GeneralZone(9)), 1234u);
+}
+
 TEST(PlayerbotSocialConversationTest, AWhisperStarterAttemptIsRationedPerPair)
 {
     // One relationship-driven whisper per pair per cooldown window, so "occasional" stays a promise

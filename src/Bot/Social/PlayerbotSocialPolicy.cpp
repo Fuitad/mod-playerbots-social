@@ -241,10 +241,19 @@ PlayerbotSocialOpportunityRejection PlayerbotSocialEvaluateOpportunity(Playerbot
     if (!opportunity.languageMatches)
         return PlayerbotSocialOpportunityRejection::LanguageMismatch;
 
-    // Both elapsed checks fail closed on a clock that moved backwards. Treating that as a very large
-    // elapsed time would expire every thread and release every cooldown at once.
-    if (opportunity.nowUnixSeconds < opportunity.threadLastActivityUnixSeconds ||
-        opportunity.nowUnixSeconds - opportunity.threadLastActivityUnixSeconds > PLAYERBOT_SOCIAL_THREAD_STALE_SECONDS)
+    /*
+     * Both elapsed checks fail closed on a clock that moved backwards. Treating that as a very large
+     * elapsed time would expire every thread and release every cooldown at once.
+     *
+     * Replies only. A starter is new speech about a quiet scope: the quieter the scope, the more
+     * the ambient cadence wants the line, so staleness rejecting it would re-create the silence
+     * spiral the cadence exists to remove. A starter subject's own freshness is enforced where the
+     * pending contexts age out.
+     */
+    if (!opportunity.starter &&
+        (opportunity.nowUnixSeconds < opportunity.threadLastActivityUnixSeconds ||
+         opportunity.nowUnixSeconds - opportunity.threadLastActivityUnixSeconds >
+             PLAYERBOT_SOCIAL_THREAD_STALE_SECONDS))
         return PlayerbotSocialOpportunityRejection::ThreadStale;
 
     if (opportunity.nowUnixSeconds < opportunity.botLastSpokeUnixSeconds ||

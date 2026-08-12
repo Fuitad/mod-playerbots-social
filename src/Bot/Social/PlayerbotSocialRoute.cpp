@@ -1832,6 +1832,14 @@ void PlayerbotSocialPumpStarters()
 
         PlayerbotSocialThreadPressure const pressure = sPlayerbotSocialMgr.PressureFor(thread, nowUnixSeconds);
 
+        /*
+         * The ambient fill is anchored to when anyone last actually SPOKE in the scope, not to the
+         * thread's coherence stamp: this pump touches the thread on every pass, so the thread-based
+         * anchor never accumulated idle time and starter pressure sat at the floor forever, which
+         * rebuilt the silence the cadence exists to remove.
+         */
+        uint64 const scopeLastSpokenAt = sPlayerbotSocialMgr.ScopeLastSpokenAt(key);
+
         PlayerbotSocialActivation activation;
         activation.thread = thread;
         activation.channel = key.channel;
@@ -1862,7 +1870,7 @@ void PlayerbotSocialPumpStarters()
 
         activation.zoneId = zoneId;
         activation.channelDensity = pressure.channelDensity;
-        activation.threadLastActivityUnixSeconds = pressure.lastActivityUnixSeconds;
+        activation.threadLastActivityUnixSeconds = scopeLastSpokenAt;
         activation.relevantHumanMessages = pressure.relevantHumanMessages;
         activation.consecutiveBotOnlyTurns = pressure.consecutiveBotOnlyTurns;
         activation.nowUnixSeconds = nowUnixSeconds;
@@ -1995,7 +2003,9 @@ void PlayerbotSocialPumpWhisperStarters()
         activation.starterSubject = starterSubject;
         activation.zoneId = bot->GetZoneId();
         activation.channelDensity = pressure.channelDensity;
-        activation.threadLastActivityUnixSeconds = pressure.lastActivityUnixSeconds;
+        // The same scope-silence anchor the public starter pump uses; the pair's whisper scope has
+        // its own clock, so a chatty pair rests while a quiet one warms toward its check-in.
+        activation.threadLastActivityUnixSeconds = sPlayerbotSocialMgr.ScopeLastSpokenAt(key);
         activation.relevantHumanMessages = pressure.relevantHumanMessages;
         activation.consecutiveBotOnlyTurns = pressure.consecutiveBotOnlyTurns;
         activation.nowUnixSeconds = nowUnixSeconds;

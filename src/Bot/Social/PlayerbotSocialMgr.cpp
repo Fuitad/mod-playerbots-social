@@ -316,7 +316,13 @@ PlayerbotSocialThreadHandle PlayerbotSocialMgr::Observe(PlayerbotSocialObservati
     if (!PlayerbotSocialChannelIsValid(observation.key.channel))
         return handle;
 
-    std::vector<Thread>& threads = _scopes[observation.key].threads;
+    Scope& scope = _scopes[observation.key];
+    std::vector<Thread>& threads = scope.threads;
+
+    // An observation IS somebody speaking, so it is what moves the scope's silence clock. Forward
+    // only, for the same reason the thread stamp is.
+    if (observation.atUnixSeconds > scope.lastSpokenAtUnixSeconds)
+        scope.lastSpokenAtUnixSeconds = observation.atUnixSeconds;
 
     /*
      * Attribution follows the participants first, then recency.
@@ -1218,6 +1224,12 @@ std::vector<PlayerbotSocialThreadKey> PlayerbotSocialMgr::ScopesWithPendingStart
             keys.push_back(scope->first);
 
     return keys;
+}
+
+uint64 PlayerbotSocialMgr::ScopeLastSpokenAt(PlayerbotSocialThreadKey const& key) const
+{
+    auto const scope = _scopes.find(key);
+    return scope == _scopes.end() ? 0 : scope->second.lastSpokenAtUnixSeconds;
 }
 
 PlayerbotSocialThreadHandle PlayerbotSocialMgr::OpenStarterThread(PlayerbotSocialThreadKey const& key,

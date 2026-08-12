@@ -900,6 +900,10 @@ public:
     // an unsupported channel, without creating state for it.
     PlayerbotSocialThreadHandle Observe(PlayerbotSocialObservation const& observation);
 
+    // When anyone last actually spoke in this scope, or zero for a scope nobody has spoken in.
+    // The starter pumps anchor the ambient fill to this rather than to thread coherence stamps.
+    [[nodiscard]] uint64 ScopeLastSpokenAt(PlayerbotSocialThreadKey const& key) const;
+
     /*
      * Takes what the quiet threads have to say, and forgets it here.
      *
@@ -1704,6 +1708,15 @@ private:
     {
         std::vector<Thread> threads;
         std::deque<PlayerbotSocialStarterContext> starters;
+
+        /*
+         * When anyone last actually said something here. The ambient starter fill anchors to this,
+         * NOT to a thread's coherence stamp: the starter pump touches threads on every pass, so a
+         * thread-based anchor never accumulates idle time and pins starter pressure at the floor.
+         * Zero means nobody has spoken since this scope was created, which the fill reads as
+         * maximally quiet, exactly right for bootstrapping a silent world.
+         */
+        uint64 lastSpokenAtUnixSeconds = 0;
 
         [[nodiscard]] bool Empty() const { return threads.empty() && starters.empty(); }
     };
