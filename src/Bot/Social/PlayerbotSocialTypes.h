@@ -25,7 +25,8 @@ enum class PlayerbotSocialProfileLoadState : uint8
     Pending = 0,          // A storage read is in flight. Social admission waits for its result.
     Loaded,               // A stored row was present and this build understands it.
     AbsentUsingBase,      // The read succeeded and no row exists. Defined first use behavior.
-    RejectedUsingBase,    // A stored row existed but was not usable. Diagnostic condition.
+    RejectedUsingBase,    // A stored row existed but was not usable. The bot speaks with the seeded
+                          // base personality; the state survives only as a diagnostic condition.
     UnavailableUsingBase  // Storage did not answer. Never equivalent to a successful absence.
 };
 

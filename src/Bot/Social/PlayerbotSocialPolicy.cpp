@@ -172,12 +172,20 @@ PlayerbotSocialOpportunityRejection PlayerbotSocialEvaluateOpportunity(Playerbot
     {
         case PlayerbotSocialProfileLoadState::Pending:
             return PlayerbotSocialOpportunityRejection::ProfilePending;
-        case PlayerbotSocialProfileLoadState::RejectedUsingBase:
-            return PlayerbotSocialOpportunityRejection::ProfileRejected;
         case PlayerbotSocialProfileLoadState::UnavailableUsingBase:
             return PlayerbotSocialOpportunityRejection::ProfileUnavailable;
+        /*
+         * Rejected is admitted, not gated. The load has already replaced the unusable row with a
+         * profile seeded from the stable base personality, exactly as it does for a missing row, so
+         * by the time an opportunity carries this state there is a fully usable profile behind it.
+         * Refusing it would contradict that fallback and mute the bot permanently, because an
+         * unsupported stored version is rejected again on every load. Unavailable stays gated: a
+         * read that never answered says nothing about what the row contains, and admitting it could
+         * speak over a profile that actually exists.
+         */
         case PlayerbotSocialProfileLoadState::Loaded:
         case PlayerbotSocialProfileLoadState::AbsentUsingBase:
+        case PlayerbotSocialProfileLoadState::RejectedUsingBase:
             break;
     }
 

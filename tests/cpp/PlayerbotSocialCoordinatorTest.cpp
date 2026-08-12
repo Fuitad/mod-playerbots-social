@@ -151,7 +151,11 @@ TEST(PlayerbotSocialCoordinatorTest, ProfileLoadHealthFailsClosedBeforeProviderA
         {PlayerbotSocialProfileLoadState::Pending, PlayerbotSocialOpportunityRejection::ProfilePending},
         {PlayerbotSocialProfileLoadState::Loaded, PlayerbotSocialOpportunityRejection::None},
         {PlayerbotSocialProfileLoadState::AbsentUsingBase, PlayerbotSocialOpportunityRejection::None},
-        {PlayerbotSocialProfileLoadState::RejectedUsingBase, PlayerbotSocialOpportunityRejection::ProfileRejected},
+        // Rejected is not a health gate: the load already replaced the unusable row with a profile
+        // seeded from the stable base personality, so admission treats it like a missing row. Muting
+        // it would silence every bot whose stored row an older or newer build wrote, permanently,
+        // because the rejection recurs deterministically on every load.
+        {PlayerbotSocialProfileLoadState::RejectedUsingBase, PlayerbotSocialOpportunityRejection::None},
         {PlayerbotSocialProfileLoadState::UnavailableUsingBase,
          PlayerbotSocialOpportunityRejection::ProfileUnavailable},
     }};
@@ -2652,14 +2656,21 @@ PlayerbotSocialRoleplayAssessmentResult AssessedAs(uint64 token, PlayerbotRolepl
 }
 }  // namespace
 
-TEST(PlayerbotSocialCoordinatorTest, RejectedBaseProfileCannotOpenAProviderRequest)
+TEST(PlayerbotSocialCoordinatorTest, RejectedBaseProfileStillOpensAProviderRequest)
 {
+    /*
+     * A rejected stored row is a diagnostic condition, not a mute switch: the load has already
+     * replaced the unusable row with a profile seeded from the stable base personality, so the bot
+     * must keep speaking with that fallback. Refusing admission here silenced every bot whose row
+     * carried an unsupported version, permanently, because the rejection recurs on every load.
+     */
     PlayerbotSocialMgr coordinator;
     RoleplayAssessmentProvider provider;
     coordinator.SetSocialProvider(&provider);
     coordinator.ApplyConsentSnapshot(900, false);
 
-    PlayerbotSocialThreadHandle const thread = coordinator.Observe(Message(GeneralZone(12), 900, true, 1000));
+    PlayerbotSocialThreadHandle const thread =
+        coordinator.Observe(Saying(GeneralZone(12), 900, true, 1000, "did anyone clear the mine?"));
     PlayerbotSocialActivation activation = RoleplayOpportunity(thread, 1000, "did anyone clear the mine?");
     activation.selectionSeed = RoleplaySeedThatAnswers(activation);
     ASSERT_NE(activation.selectionSeed, 0u);
@@ -2668,10 +2679,9 @@ TEST(PlayerbotSocialCoordinatorTest, RejectedBaseProfileCannotOpenAProviderReque
     PlayerbotSocialActivationResult const result =
         coordinator.Activate(activation, PlayerbotSocialDensityProfile::Normal);
 
-    EXPECT_TRUE(result.openedTokens.empty());
-    ASSERT_EQ(result.refusedCandidates.size(), 1u);
-    EXPECT_EQ(result.refusedCandidates.front().second, PlayerbotSocialOpportunityRejection::ProfileRejected);
-    EXPECT_TRUE(provider.generationTokens.empty());
+    EXPECT_TRUE(result.refusedCandidates.empty());
+    ASSERT_EQ(result.openedTokens.size(), 1u);
+    EXPECT_EQ(provider.generationTokens.size(), 1u);
     coordinator.SetSocialProvider(nullptr);
 }
 

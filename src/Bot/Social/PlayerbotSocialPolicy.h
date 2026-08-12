@@ -214,7 +214,8 @@ enum class PlayerbotSocialOpportunityRejection : uint8
     DuplicateSuppressed,
     BotOnlyTurnLimit,
     ProfilePending,
-    ProfileRejected,
+    ProfileRejected,  // Retained for durable telemetry; the gate no longer produces it, because a
+                      // rejected row already degraded to a usable base-personality profile at load.
     ProfileUnavailable
 };
 
