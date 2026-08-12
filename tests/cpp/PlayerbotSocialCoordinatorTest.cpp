@@ -1965,12 +1965,24 @@ TEST(PlayerbotSocialModerationTest, AHostileTargetedExchangeProducesTheCaseRowVa
 
     EXPECT_EQ(binding.subjectActorId, 4242u);
     EXPECT_EQ(binding.category, "targeted_abuse");
-    EXPECT_EQ(binding.occurrenceContribution, 1u);
+
+    /*
+     * The threshold-crossing write carries the whole window tally: the case opened BECAUSE two
+     * occurrences happened, so a count of 1 beside evidence saying window_occurrences 2 would
+     * undercount every threshold-2 case by one. Later occurrences in the window contribute one.
+     */
+    EXPECT_EQ(binding.occurrenceContribution, 2u);
     EXPECT_EQ(binding.firstOccurredAtUnixSeconds, 1000u);
     EXPECT_EQ(binding.lastOccurredAtUnixSeconds, 1060u);
     EXPECT_NE(binding.evidenceJson.find("\"speaker_actor_id\":7001"), std::string::npos);
     EXPECT_NE(binding.evidenceJson.find("worthless trash"), std::string::npos);
     EXPECT_NE(binding.evidenceJson.find("\"window_occurrences\":2"), std::string::npos);
+
+    // A third in-window line bumps the existing case by one, not by the tally again.
+    EXPECT_TRUE(PlayerbotSocialNoteHostileOccurrence(tally, *category, 1120));
+    PlayerbotSocialModerationCaseBinding const bump =
+        PlayerbotSocialBuildModerationCaseBinding(4242, *category, tally, 7001, "you are worthless trash, shut up");
+    EXPECT_EQ(bump.occurrenceContribution, 1u);
 }
 
 TEST(PlayerbotSocialBudgetWiringTest, TheCoordinatorRulesProviderCallsThroughTheConfiguredBudget)

@@ -3878,7 +3878,8 @@ PlayerbotSocialEncounterSweepResult PlayerbotSocialMgr::CompleteStaleEncounters(
 bool PlayerbotSocialMgr::AdmitProviderCall(uint64 nowUnixSeconds, bool continuation)
 {
     switch (PlayerbotSocialGovernProviderCall(_providerBudget, nowUnixSeconds,
-                                              sPlayerbotSocialConfig.socialChatProviderHourlyBudget, continuation))
+                                              sPlayerbotSocialConfig.socialChatProviderHourlyBudget, continuation,
+                                              _runtimeControl.budgetCircuitOpen))
     {
         case PlayerbotSocialBudgetDecision::Admitted:
             return true;

@@ -373,11 +373,16 @@ enum class PlayerbotSocialBudgetDecision : uint8
     RefusedCircuitTrip
 };
 
-// `continuation` marks a request that answers an existing thread rather than opening a new one;
-// continuations may draw the reserved bottom of the bucket, starters stop above it.
+/*
+ * `continuation` marks a request that answers an existing thread rather than opening a new one;
+ * continuations may draw the reserved bottom of the bucket, starters stop above it. `circuitOpen`
+ * is the durable budget circuit: while it is open every call is refused before the bucket is
+ * touched, so admission honours the same hard stop the pumps and delivery already do, and the
+ * refusals never escalate into a second trip.
+ */
 [[nodiscard]] PlayerbotSocialBudgetDecision PlayerbotSocialGovernProviderCall(
     PlayerbotSocialProviderBudgetState& state, uint64 nowUnixSeconds, uint32 hourlyBudget,
-    bool continuation = false);
+    bool continuation = false, bool circuitOpen = false);
 
 /*
  * Whether a request may draw the continuation reserve: any reply (its empty starter subject is

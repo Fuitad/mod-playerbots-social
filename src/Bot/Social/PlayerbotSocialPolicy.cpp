@@ -284,8 +284,16 @@ PlayerbotSocialOpportunityRejection PlayerbotSocialEvaluateOpportunity(Playerbot
 
 PlayerbotSocialBudgetDecision PlayerbotSocialGovernProviderCall(PlayerbotSocialProviderBudgetState& state,
                                                                 uint64 nowUnixSeconds, uint32 hourlyBudget,
-                                                                bool continuation)
+                                                                bool continuation, bool circuitOpen)
 {
+    /*
+     * The open circuit outranks everything, the bucket and the no-ceiling escape hatch alike. It
+     * is refused before the refusal ledger too, so circuit-open refusals can never accumulate
+     * into a second trip while the first is still standing.
+     */
+    if (circuitOpen)
+        return PlayerbotSocialBudgetDecision::Refused;
+
     // Zero is the operator saying "no ceiling"; refusing everything on it would be the failure the
     // budget exists to prevent, pointed the other way.
     if (hourlyBudget == 0)

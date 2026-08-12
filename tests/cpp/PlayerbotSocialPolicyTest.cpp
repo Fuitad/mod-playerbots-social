@@ -958,6 +958,31 @@ TEST(PlayerbotSocialBudgetTest, OnlyPathologicalOverrunTripsTheCircuit)
     EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 5000, 1), PlayerbotSocialBudgetDecision::RefusedCircuitTrip);
 }
 
+TEST(PlayerbotSocialBudgetTest, AnOpenCircuitRefusesEveryProviderCall)
+{
+    /*
+     * The durable circuit's contract is "the feature is silent until an operator clears it".
+     * GateIsLive silences the pumps and delivery, but provider admission is its own boundary:
+     * without this refusal, a human-driven reply opportunity keeps spending provider calls with
+     * the circuit open, which is exactly the runaway spend the circuit exists to stop.
+     */
+    PlayerbotSocialProviderBudgetState state;
+
+    // A full bucket admits nothing while the circuit is open, starter and continuation alike.
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000, 120, /*continuation=*/false, /*circuitOpen=*/true),
+              PlayerbotSocialBudgetDecision::Refused);
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000, 120, true, true), PlayerbotSocialBudgetDecision::Refused);
+
+    // Circuit-open refusals never escalate to another trip, however many arrive.
+    for (uint64 refusal = 0; refusal < PLAYERBOT_SOCIAL_BUDGET_TRIP_MULTIPLE * 120; ++refusal)
+        EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000, 120, true, true),
+                  PlayerbotSocialBudgetDecision::Refused);
+
+    // Clearing the circuit restores the untouched bucket.
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000, 120, true, false),
+              PlayerbotSocialBudgetDecision::Admitted);
+}
+
 TEST(PlayerbotSocialBudgetTest, AZeroBudgetMeansUnlimited)
 {
     // Zero is the operator saying "no ceiling", which must never mean "nothing may speak".

@@ -58,7 +58,7 @@ std::string_view StatementSql(PlayerbotSocialStatementId id)
             return "INSERT INTO playerbot_social_moderation_case (public_id, subject_actor_id, category, "
                    "occurrence_count, first_occurred_at, last_occurred_at, status, evidence) "
                    "VALUES (?, ?, ?, ?, FROM_UNIXTIME(?), FROM_UNIXTIME(?), 'open', ?) "
-                   "ON DUPLICATE KEY UPDATE occurrence_count = occurrence_count + 1, "
+                   "ON DUPLICATE KEY UPDATE occurrence_count = occurrence_count + VALUES(occurrence_count), "
                    "last_occurred_at = VALUES(last_occurred_at), evidence = VALUES(evidence)";
         case PLAYERBOT_SOCIAL_STMT_INS_PROFILE:
             return "INSERT INTO playerbot_social_profile (bot_actor_id, schema_version, traits_version, "

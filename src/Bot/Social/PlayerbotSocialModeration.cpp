@@ -103,7 +103,16 @@ PlayerbotSocialModerationCaseBinding PlayerbotSocialBuildModerationCaseBinding(
     PlayerbotSocialModerationCaseBinding binding;
     binding.subjectActorId = subjectActorId;
     binding.category = PlayerbotSocialModerationCategoryName(category);
-    binding.occurrenceContribution = 1;
+
+    /*
+     * The window's threshold-crossing write carries the whole tally: a threshold-2 case opens
+     * BECAUSE two occurrences happened, so contributing 1 would undercount every such case by one
+     * (the row's own evidence JSON says window_occurrences 2 beside occurrence_count 1). Every
+     * later occurrence in the window contributes one, and the upsert's update arm adds exactly
+     * this bound value either way.
+     */
+    binding.occurrenceContribution =
+        tally.occurrences == PlayerbotSocialModerationOpeningThreshold(category) ? tally.occurrences : 1;
     binding.firstOccurredAtUnixSeconds = tally.firstAtUnixSeconds;
     binding.lastOccurredAtUnixSeconds = tally.lastAtUnixSeconds;
 
