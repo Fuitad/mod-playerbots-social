@@ -274,7 +274,8 @@ PlayerbotSocialOpportunityRejection PlayerbotSocialEvaluateOpportunity(Playerbot
 }
 
 PlayerbotSocialBudgetDecision PlayerbotSocialGovernProviderCall(PlayerbotSocialProviderBudgetState& state,
-                                                                uint64 nowUnixSeconds, uint32 hourlyBudget)
+                                                                uint64 nowUnixSeconds, uint32 hourlyBudget,
+                                                                bool continuation)
 {
     // Zero is the operator saying "no ceiling"; refusing everything on it would be the failure the
     // budget exists to prevent, pointed the other way.
@@ -303,7 +304,13 @@ PlayerbotSocialBudgetDecision PlayerbotSocialGovernProviderCall(PlayerbotSocialP
     }
     state.lastRefillUnixSeconds = nowUnixSeconds;
 
-    if (state.tokens >= 1.0)
+    // A starter stops above the continuation reserve; a continuation may drain the bucket.
+    double const admissionFloor =
+        continuation ? 1.0
+                     : 1.0 + static_cast<double>(static_cast<uint32>(burst) /
+                                                 PLAYERBOT_SOCIAL_BUDGET_CONTINUATION_RESERVE_DIVISOR);
+
+    if (state.tokens >= admissionFloor)
     {
         state.tokens -= 1.0;
         return PlayerbotSocialBudgetDecision::Admitted;

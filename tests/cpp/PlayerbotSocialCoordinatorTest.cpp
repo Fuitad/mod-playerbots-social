@@ -1943,6 +1943,36 @@ TEST(PlayerbotSocialModerationTest, ThresholdsOpenCasesPerCategoryInsideTheWindo
                                                       1000 + PLAYERBOT_SOCIAL_MODERATION_WINDOW_SECONDS + 1));
 }
 
+TEST(PlayerbotSocialModerationTest, AHostileTargetedExchangeProducesTheCaseRowValuesTheUpsertPersists)
+{
+    /*
+     * The formation pipeline end to end, up to the statement boundary the harness cannot cross:
+     * two targeted insults inside the window cross the abuse threshold, and the binding built for
+     * the upsert carries exactly the values the row is opened with. The INSERT itself fixes
+     * status='open' in its SQL and is exercised live.
+     */
+    std::optional<PlayerbotSocialModerationCategory> const category =
+        PlayerbotSocialClassifyHostileLine("you are worthless trash, shut up");
+    ASSERT_TRUE(category.has_value());
+    EXPECT_EQ(*category, PlayerbotSocialModerationCategory::TargetedAbuse);
+
+    PlayerbotSocialModerationTally tally;
+    EXPECT_FALSE(PlayerbotSocialNoteHostileOccurrence(tally, *category, 1000));
+    EXPECT_TRUE(PlayerbotSocialNoteHostileOccurrence(tally, *category, 1060));
+
+    PlayerbotSocialModerationCaseBinding const binding =
+        PlayerbotSocialBuildModerationCaseBinding(4242, *category, tally, 7001, "you are worthless trash, shut up");
+
+    EXPECT_EQ(binding.subjectActorId, 4242u);
+    EXPECT_EQ(binding.category, "targeted_abuse");
+    EXPECT_EQ(binding.occurrenceContribution, 1u);
+    EXPECT_EQ(binding.firstOccurredAtUnixSeconds, 1000u);
+    EXPECT_EQ(binding.lastOccurredAtUnixSeconds, 1060u);
+    EXPECT_NE(binding.evidenceJson.find("\"speaker_actor_id\":7001"), std::string::npos);
+    EXPECT_NE(binding.evidenceJson.find("worthless trash"), std::string::npos);
+    EXPECT_NE(binding.evidenceJson.find("\"window_occurrences\":2"), std::string::npos);
+}
+
 TEST(PlayerbotSocialBudgetWiringTest, TheCoordinatorRulesProviderCallsThroughTheConfiguredBudget)
 {
     // The pure governor is proven in PlayerbotSocialBudgetTest; this pins the coordinator actually

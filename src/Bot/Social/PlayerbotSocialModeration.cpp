@@ -96,6 +96,44 @@ uint32 PlayerbotSocialModerationOpeningThreshold(PlayerbotSocialModerationCatego
     return 2;
 }
 
+PlayerbotSocialModerationCaseBinding PlayerbotSocialBuildModerationCaseBinding(
+    uint32 subjectActorId, PlayerbotSocialModerationCategory category,
+    PlayerbotSocialModerationTally const& tally, std::optional<uint32> speakerActorId, std::string_view line)
+{
+    PlayerbotSocialModerationCaseBinding binding;
+    binding.subjectActorId = subjectActorId;
+    binding.category = PlayerbotSocialModerationCategoryName(category);
+    binding.occurrenceContribution = 1;
+    binding.firstOccurredAtUnixSeconds = tally.firstAtUnixSeconds;
+    binding.lastOccurredAtUnixSeconds = tally.lastAtUnixSeconds;
+
+    // Escaped by hand because this file stays free of the coordinator's helpers; the alphabet is
+    // small (backslash, quote, and control bytes) and anything else passes through untouched.
+    std::string escaped;
+    std::string_view const bounded = line.size() > 120 ? line.substr(0, 120) : line;
+    escaped.reserve(bounded.size());
+    for (char const character : bounded)
+    {
+        if (character == '\\' || character == '"')
+        {
+            escaped.push_back('\\');
+            escaped.push_back(character);
+        }
+        else if (static_cast<unsigned char>(character) < 0x20)
+            escaped.push_back(' ');
+        else
+            escaped.push_back(character);
+    }
+
+    binding.evidenceJson = "{\"last_line\":\"" + escaped + '"';
+    if (speakerActorId.has_value())
+        binding.evidenceJson += ",\"speaker_actor_id\":" + std::to_string(*speakerActorId);
+    binding.evidenceJson += ",\"window_occurrences\":" + std::to_string(tally.occurrences);
+    binding.evidenceJson += '}';
+
+    return binding;
+}
+
 bool PlayerbotSocialNoteHostileOccurrence(PlayerbotSocialModerationTally& tally,
                                           PlayerbotSocialModerationCategory category, uint64 nowUnixSeconds)
 {

@@ -1598,10 +1598,11 @@ public:
      */
     /*
      * The server-wide provider budget. True admits the call and stamps the window; false refuses
-     * it, and a sustained overrun opens the durable budget circuit as the backstop. World thread
-     * only, like every other admission decision here.
+     * it, and a sustained overrun opens the durable budget circuit as the backstop. Continuations
+     * may draw the reserved bottom of the bucket; starters stop above it. World thread only, like
+     * every other admission decision here.
      */
-    bool AdmitProviderCall(uint64 nowUnixSeconds);
+    bool AdmitProviderCall(uint64 nowUnixSeconds, bool continuation = false);
 
     // Opens the durable backstop: flips the runtime control's circuit, persists the circuit columns
     // (and only those), and says so loudly. Idempotent while already open.

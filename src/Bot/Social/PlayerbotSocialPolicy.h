@@ -338,6 +338,14 @@ inline constexpr uint64 PLAYERBOT_SOCIAL_PROVIDER_BUDGET_WINDOW_SECONDS = 3600;
 inline constexpr uint32 PLAYERBOT_SOCIAL_PROVIDER_BURST_DIVISOR = 12;
 inline constexpr uint64 PLAYERBOT_SOCIAL_BUDGET_TRIP_MULTIPLE = 20;
 
+/*
+ * The bottom quarter of the burst is reserved for continuations. Starter demand runs at many times
+ * the budget, so without a reserve starters win every token and a reply to a bot's line never
+ * opens: threads stall at one turn and the conversation half of the feature starves. Integer
+ * division, so a degenerate burst of one to three tokens reserves nothing.
+ */
+inline constexpr uint32 PLAYERBOT_SOCIAL_BUDGET_CONTINUATION_RESERVE_DIVISOR = 4;
+
 struct PlayerbotSocialProviderBudgetState
 {
     // Negative means unseeded; the first decision seeds the bucket at its burst capacity.
@@ -356,8 +364,11 @@ enum class PlayerbotSocialBudgetDecision : uint8
     RefusedCircuitTrip
 };
 
+// `continuation` marks a request that answers an existing thread rather than opening a new one;
+// continuations may draw the reserved bottom of the bucket, starters stop above it.
 [[nodiscard]] PlayerbotSocialBudgetDecision PlayerbotSocialGovernProviderCall(
-    PlayerbotSocialProviderBudgetState& state, uint64 nowUnixSeconds, uint32 hourlyBudget);
+    PlayerbotSocialProviderBudgetState& state, uint64 nowUnixSeconds, uint32 hourlyBudget,
+    bool continuation = false);
 
 /*
  * The state of one inferred thread, as values. Counters rather than history: the coordinator keeps

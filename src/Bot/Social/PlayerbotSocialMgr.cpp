@@ -3818,10 +3818,10 @@ PlayerbotSocialEncounterSweepResult PlayerbotSocialMgr::CompleteStaleEncounters(
     return result;
 }
 
-bool PlayerbotSocialMgr::AdmitProviderCall(uint64 nowUnixSeconds)
+bool PlayerbotSocialMgr::AdmitProviderCall(uint64 nowUnixSeconds, bool continuation)
 {
     switch (PlayerbotSocialGovernProviderCall(_providerBudget, nowUnixSeconds,
-                                              sPlayerbotSocialConfig.socialChatProviderHourlyBudget))
+                                              sPlayerbotSocialConfig.socialChatProviderHourlyBudget, continuation))
     {
         case PlayerbotSocialBudgetDecision::Admitted:
             return true;
@@ -3900,21 +3900,21 @@ void PlayerbotSocialMgr::NoteHostileLine(uint64 subjectGuidCounter, uint64 speak
     if (subject == _actorIds.end())
         return;
 
-    std::string evidence = "{\"last_line\":";
-    AppendJsonString(evidence, text.size() > 120 ? text.substr(0, 120) : text);
+    std::optional<uint32> speakerActorId;
     if (auto const speaker = _actorIds.find(speakerGuidCounter); speaker != _actorIds.end())
-        evidence += ",\"speaker_actor_id\":" + std::to_string(speaker->second);
-    evidence += ",\"window_occurrences\":" + std::to_string(tally.occurrences);
-    evidence += '}';
+        speakerActorId = speaker->second;
+
+    PlayerbotSocialModerationCaseBinding const binding =
+        PlayerbotSocialBuildModerationCaseBinding(subject->second, category, tally, speakerActorId, text);
 
     PlayerbotSocialPreparedStatement* statement = NewPlayerbotSocialStatement(PLAYERBOT_SOCIAL_STMT_INS_MODERATION_CASE);
     statement->SetData(0, MakeModerationCasePublicId(subjectGuidCounter, category));
-    statement->SetData(1, subject->second);
-    statement->SetData(2, std::string(PlayerbotSocialModerationCategoryName(category)));
-    statement->SetData(3, static_cast<uint32>(1));
-    statement->SetData(4, tally.firstAtUnixSeconds);
-    statement->SetData(5, nowUnixSeconds);
-    statement->SetData(6, evidence);
+    statement->SetData(1, binding.subjectActorId);
+    statement->SetData(2, binding.category);
+    statement->SetData(3, binding.occurrenceContribution);
+    statement->SetData(4, binding.firstOccurredAtUnixSeconds);
+    statement->SetData(5, binding.lastOccurredAtUnixSeconds);
+    statement->SetData(6, binding.evidenceJson);
     PlayerbotSocialExecute(statement);
 
     LOG_WARN("playerbots", "Social moderation case opened or bumped: subject bot {} category {} occurrences {}.",
@@ -5142,9 +5142,11 @@ uint64 PlayerbotSocialMgr::BeginSocialRequest(
     /*
      * The server-wide budget rules before anything is reserved or recorded, so a refused request
      * costs nothing downstream. Every generation the sidecar would run passes through here, which
-     * is what makes the ceiling an actual ceiling on sidecar load.
+     * is what makes the ceiling an actual ceiling on sidecar load. A reply is a continuation and
+     * may draw the reserved bottom of the bucket; a starter (its subject is what marks it) stops
+     * above the reserve, so the starter flood can never silence the conversations it opens.
      */
-    if (!AdmitProviderCall(nowUnixSeconds))
+    if (!AdmitProviderCall(nowUnixSeconds, starterSubject.empty()))
     {
         rejection = PlayerbotSocialDeliveryRejection::BudgetExhausted;
         return 0;

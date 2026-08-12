@@ -869,18 +869,43 @@ TEST(PlayerbotSocialBudgetTest, TheBudgetAdmitsABurstThenRefillsAtTheHourlyRate)
      * A token bucket, not a windowed count: a windowed count admits the whole hour's budget as one
      * opening burst and then starves the rest of the hour, which reads exactly like the silence
      * this build removes. Budget 120 means a burst of ten and one new token every thirty seconds,
-     * so lively is steady rather than a flood followed by a graveyard.
+     * so lively is steady rather than a flood followed by a graveyard. Continuations draw the
+     * whole bucket.
      */
     PlayerbotSocialProviderBudgetState state;
 
     for (uint64 call = 0; call < 10; ++call)
-        EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000, 120), PlayerbotSocialBudgetDecision::Admitted);
+        EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000, 120, /*continuation=*/true),
+                  PlayerbotSocialBudgetDecision::Admitted);
 
-    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000, 120), PlayerbotSocialBudgetDecision::Refused);
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000, 120, true), PlayerbotSocialBudgetDecision::Refused);
 
     // Thirty seconds refills exactly one token at 120 per hour.
-    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1030, 120), PlayerbotSocialBudgetDecision::Admitted);
-    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1030, 120), PlayerbotSocialBudgetDecision::Refused);
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1030, 120, true), PlayerbotSocialBudgetDecision::Admitted);
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1030, 120, true), PlayerbotSocialBudgetDecision::Refused);
+}
+
+TEST(PlayerbotSocialBudgetTest, StartersCannotDrainTheContinuationReserve)
+{
+    /*
+     * Observed live: starter demand runs at many times the budget, so starters won every token and
+     * replies to bot lines never opened, which is why no thread ever reached a real length. The
+     * bottom of the bucket is reserved for continuations: starters stop above it, and a reply that
+     * arrives when starters have spent the rest still gets its line.
+     */
+    PlayerbotSocialProviderBudgetState state;
+
+    // Budget 120: burst ten, reserve two. Starters take the bucket from ten down to the reserve.
+    for (uint64 call = 0; call < 8; ++call)
+        EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 2000, 120, /*continuation=*/false),
+                  PlayerbotSocialBudgetDecision::Admitted);
+
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 2000, 120, false), PlayerbotSocialBudgetDecision::Refused);
+
+    // The reserve still carries continuations, and only continuations.
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 2000, 120, true), PlayerbotSocialBudgetDecision::Admitted);
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 2000, 120, true), PlayerbotSocialBudgetDecision::Admitted);
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 2000, 120, true), PlayerbotSocialBudgetDecision::Refused);
 }
 
 TEST(PlayerbotSocialBudgetTest, OnlyPathologicalOverrunTripsTheCircuit)

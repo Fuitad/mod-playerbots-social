@@ -6,6 +6,7 @@
 #define PLAYERBOTS_PLAYERBOTSOCIALMODERATION_H
 
 #include <optional>
+#include <string>
 #include <string_view>
 
 #include "Define.h"
@@ -62,5 +63,25 @@ struct PlayerbotSocialModerationTally
 [[nodiscard]] bool PlayerbotSocialNoteHostileOccurrence(PlayerbotSocialModerationTally& tally,
                                                         PlayerbotSocialModerationCategory category,
                                                         uint64 nowUnixSeconds);
+
+/*
+ * The values the case upsert binds, built pure so a test can prove exactly what a row is opened
+ * with; the statement itself fixes status='open' in its SQL and adds occurrences on collision.
+ * The evidence JSON is bounded: a truncated last line, the speaker's actor id when known, and the
+ * window occurrence count.
+ */
+struct PlayerbotSocialModerationCaseBinding
+{
+    uint32 subjectActorId = 0;
+    std::string category;
+    uint32 occurrenceContribution = 1;
+    uint64 firstOccurredAtUnixSeconds = 0;
+    uint64 lastOccurredAtUnixSeconds = 0;
+    std::string evidenceJson;
+};
+
+[[nodiscard]] PlayerbotSocialModerationCaseBinding PlayerbotSocialBuildModerationCaseBinding(
+    uint32 subjectActorId, PlayerbotSocialModerationCategory category,
+    PlayerbotSocialModerationTally const& tally, std::optional<uint32> speakerActorId, std::string_view line);
 
 #endif
