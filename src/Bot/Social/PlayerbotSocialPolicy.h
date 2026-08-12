@@ -326,16 +326,23 @@ struct PlayerbotSocialDensityMultipliers
                                                      PlayerbotSocialDensityMultipliers const& multipliers);
 
 /*
- * The server-wide provider call budget. One sliding hour, one ceiling: while the window holds
- * `hourlyBudget` admitted calls, further calls are refused, and demand reaching twice the budget
- * inside the window is ruled a runaway loop rather than a busy hour and trips the budget circuit.
- * Pure state plus a pure decision, so the whole ladder is testable without a database.
+ * The server-wide provider call budget, shaped as a token bucket rather than a windowed count: a
+ * windowed count admits the whole hour's budget as one opening burst and then starves the rest of
+ * the hour. Tokens refill at hourlyBudget per hour and cap at a small burst, so the spend is
+ * steady. Refusals are still tallied on a sliding hour, and only a pathological volume of them,
+ * many multiples of the budget, trips the durable circuit: with hundreds of bots the refusal lane
+ * runs warm all day, and that is the ceiling working, not an emergency. Pure state plus a pure
+ * decision, so the whole ladder is testable without a database.
  */
 inline constexpr uint64 PLAYERBOT_SOCIAL_PROVIDER_BUDGET_WINDOW_SECONDS = 3600;
+inline constexpr uint32 PLAYERBOT_SOCIAL_PROVIDER_BURST_DIVISOR = 12;
+inline constexpr uint64 PLAYERBOT_SOCIAL_BUDGET_TRIP_MULTIPLE = 20;
 
 struct PlayerbotSocialProviderBudgetState
 {
-    std::deque<uint64> admittedAtUnixSeconds;
+    // Negative means unseeded; the first decision seeds the bucket at its burst capacity.
+    double tokens = -1.0;
+    uint64 lastRefillUnixSeconds = 0;
     std::deque<uint64> refusedAtUnixSeconds;
 };
 

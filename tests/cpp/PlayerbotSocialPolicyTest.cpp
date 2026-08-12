@@ -863,34 +863,41 @@ TEST(PlayerbotSocialPressureTest, RisingDensityLowersBothPressuresAndStartersFas
     EXPECT_LT(busyStarter / quietStarter, busyReply / quietReply);
 }
 
-TEST(PlayerbotSocialBudgetTest, TheHourlyBudgetAdmitsUpToTheCapAndRefusesBeyondIt)
+TEST(PlayerbotSocialBudgetTest, TheBudgetAdmitsABurstThenRefillsAtTheHourlyRate)
 {
+    /*
+     * A token bucket, not a windowed count: a windowed count admits the whole hour's budget as one
+     * opening burst and then starves the rest of the hour, which reads exactly like the silence
+     * this build removes. Budget 120 means a burst of ten and one new token every thirty seconds,
+     * so lively is steady rather than a flood followed by a graveyard.
+     */
     PlayerbotSocialProviderBudgetState state;
 
-    for (uint64 call = 0; call < 5; ++call)
-        EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000 + call, 5),
-                  PlayerbotSocialBudgetDecision::Admitted);
+    for (uint64 call = 0; call < 10; ++call)
+        EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000, 120), PlayerbotSocialBudgetDecision::Admitted);
 
-    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1010, 5), PlayerbotSocialBudgetDecision::Refused);
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000, 120), PlayerbotSocialBudgetDecision::Refused);
 
-    // The window slides: an hour after the first admissions the budget is available again.
-    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000 + 3601, 5), PlayerbotSocialBudgetDecision::Admitted);
+    // Thirty seconds refills exactly one token at 120 per hour.
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1030, 120), PlayerbotSocialBudgetDecision::Admitted);
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1030, 120), PlayerbotSocialBudgetDecision::Refused);
 }
 
-TEST(PlayerbotSocialBudgetTest, SustainedOverrunTripsTheCircuit)
+TEST(PlayerbotSocialBudgetTest, OnlyPathologicalOverrunTripsTheCircuit)
 {
-    // Demand at twice the budget inside one window is a runaway feedback loop, not a busy hour.
-    // The trip is the hard backstop the budget circuit exists for.
+    /*
+     * Organic demand above the budget is the ceiling WORKING, not an emergency: with hundreds of
+     * bots the refusal lane runs warm all day. The durable circuit is for a runaway loop, so it
+     * trips only when refusals inside one hour reach many multiples of the budget.
+     */
     PlayerbotSocialProviderBudgetState state;
 
-    for (uint64 call = 0; call < 5; ++call)
-        EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 2000, 5), PlayerbotSocialBudgetDecision::Admitted);
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 5000, 1), PlayerbotSocialBudgetDecision::Admitted);
 
-    for (uint64 refusal = 0; refusal < 4; ++refusal)
-        EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 2001, 5), PlayerbotSocialBudgetDecision::Refused);
+    for (uint64 refusal = 0; refusal + 1 < PLAYERBOT_SOCIAL_BUDGET_TRIP_MULTIPLE; ++refusal)
+        EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 5000, 1), PlayerbotSocialBudgetDecision::Refused);
 
-    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 2002, 5),
-              PlayerbotSocialBudgetDecision::RefusedCircuitTrip);
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 5000, 1), PlayerbotSocialBudgetDecision::RefusedCircuitTrip);
 }
 
 TEST(PlayerbotSocialBudgetTest, AZeroBudgetMeansUnlimited)

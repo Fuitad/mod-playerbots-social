@@ -281,27 +281,45 @@ PlayerbotSocialBudgetDecision PlayerbotSocialGovernProviderCall(PlayerbotSocialP
     if (hourlyBudget == 0)
         return PlayerbotSocialBudgetDecision::Admitted;
 
-    auto const prune = [nowUnixSeconds](std::deque<uint64>& stamps)
-    {
-        while (!stamps.empty() && (nowUnixSeconds < stamps.front() ||
-                                   nowUnixSeconds - stamps.front() >= PLAYERBOT_SOCIAL_PROVIDER_BUDGET_WINDOW_SECONDS))
-            stamps.pop_front();
-    };
+    double const burst =
+        static_cast<double>(hourlyBudget < PLAYERBOT_SOCIAL_PROVIDER_BURST_DIVISOR
+                                ? 1
+                                : hourlyBudget / PLAYERBOT_SOCIAL_PROVIDER_BURST_DIVISOR);
 
-    prune(state.admittedAtUnixSeconds);
-    prune(state.refusedAtUnixSeconds);
-
-    if (state.admittedAtUnixSeconds.size() < hourlyBudget)
+    if (state.tokens < 0.0)
     {
-        state.admittedAtUnixSeconds.push_back(nowUnixSeconds);
+        state.tokens = burst;
+        state.lastRefillUnixSeconds = nowUnixSeconds;
+    }
+
+    // A clock that moved backwards refills nothing and re-anchors, so a correction can neither
+    // mint tokens nor freeze the bucket until the old timestamp is reached again.
+    if (nowUnixSeconds > state.lastRefillUnixSeconds)
+    {
+        double const refilled = static_cast<double>(nowUnixSeconds - state.lastRefillUnixSeconds) *
+                                static_cast<double>(hourlyBudget) /
+                                static_cast<double>(PLAYERBOT_SOCIAL_PROVIDER_BUDGET_WINDOW_SECONDS);
+        state.tokens = state.tokens + refilled > burst ? burst : state.tokens + refilled;
+    }
+    state.lastRefillUnixSeconds = nowUnixSeconds;
+
+    if (state.tokens >= 1.0)
+    {
+        state.tokens -= 1.0;
         return PlayerbotSocialBudgetDecision::Admitted;
     }
 
+    while (!state.refusedAtUnixSeconds.empty() &&
+           (nowUnixSeconds < state.refusedAtUnixSeconds.front() ||
+            nowUnixSeconds - state.refusedAtUnixSeconds.front() >= PLAYERBOT_SOCIAL_PROVIDER_BUDGET_WINDOW_SECONDS))
+        state.refusedAtUnixSeconds.pop_front();
+
     state.refusedAtUnixSeconds.push_back(nowUnixSeconds);
 
-    // Refusals matching the budget inside one window means demand ran to at least twice the ceiling.
-    return state.refusedAtUnixSeconds.size() >= hourlyBudget ? PlayerbotSocialBudgetDecision::RefusedCircuitTrip
-                                                             : PlayerbotSocialBudgetDecision::Refused;
+    return state.refusedAtUnixSeconds.size() >=
+                   static_cast<std::size_t>(hourlyBudget) * PLAYERBOT_SOCIAL_BUDGET_TRIP_MULTIPLE
+               ? PlayerbotSocialBudgetDecision::RefusedCircuitTrip
+               : PlayerbotSocialBudgetDecision::Refused;
 }
 
 float PlayerbotSocialNormalizeDensityMultiplier(float value, float fallback)

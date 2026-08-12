@@ -34,10 +34,12 @@ PlayerbotsSocial.Autonomous.BotTurnDecay = 0.85
 PlayerbotsSocial.Whisper.MinFamiliarity = 0.01
 PlayerbotsSocial.Whisper.PairCooldownSeconds = 21600
 
-# Server-wide LLM provider call ceiling per sliding hour. Requests beyond it are refused with the
-# budget_exhausted reason, and demand reaching twice the ceiling inside one hour opens the budget
-# circuit (durable; an operator closes it by clearing budget_circuit_open in
-# playerbot_social_runtime_control). Zero means no ceiling. Default: 120
+# Server-wide LLM provider call ceiling per hour, spent as a token bucket (a small burst plus a
+# steady refill) so lively stays steady instead of a burst followed by silence. Requests beyond it
+# are refused with the budget_exhausted reason; only a pathological refusal volume (twenty times
+# the ceiling inside one hour) opens the durable budget circuit, which an operator closes by
+# clearing budget_circuit_open in playerbot_social_runtime_control. Zero means no ceiling.
+# Default: 120
 PlayerbotsSocial.Provider.HourlyBudget = 120
 
 # Social event retention in hours. Values below the privacy floor are raised to the floor. Default: 48

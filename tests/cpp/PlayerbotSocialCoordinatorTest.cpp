@@ -1951,11 +1951,11 @@ TEST(PlayerbotSocialBudgetWiringTest, TheCoordinatorRulesProviderCallsThroughThe
     PlayerbotSocialMgr coordinator;
 
     uint32 const saved = sPlayerbotSocialConfig.socialChatProviderHourlyBudget;
-    sPlayerbotSocialConfig.socialChatProviderHourlyBudget = 2;
+    sPlayerbotSocialConfig.socialChatProviderHourlyBudget = 24;  // burst of two, one token per 150s
 
     EXPECT_TRUE(coordinator.AdmitProviderCall(5000));
-    EXPECT_TRUE(coordinator.AdmitProviderCall(5001));
-    EXPECT_FALSE(coordinator.AdmitProviderCall(5002));
+    EXPECT_TRUE(coordinator.AdmitProviderCall(5000));
+    EXPECT_FALSE(coordinator.AdmitProviderCall(5000));
 
     sPlayerbotSocialConfig.socialChatProviderHourlyBudget = saved;
 }
