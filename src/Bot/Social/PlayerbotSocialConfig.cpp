@@ -24,11 +24,16 @@ PlayerbotSocialConfigValues NormalizePlayerbotSocialConfig(PlayerbotSocialConfig
         values.socialChatAutonomousMaxConsecutiveBotTurns = 6;
     if (!std::isfinite(values.socialChatAutonomousBotTurnDecay) || values.socialChatAutonomousBotTurnDecay <= 0.0f ||
         values.socialChatAutonomousBotTurnDecay > 1.0f)
-        values.socialChatAutonomousBotTurnDecay = 0.85f;
+        values.socialChatAutonomousBotTurnDecay = 0.95f;
     if (!std::isfinite(values.socialChatAutonomousContinuationPressureBase) ||
         values.socialChatAutonomousContinuationPressureBase <= 0.0f ||
         values.socialChatAutonomousContinuationPressureBase > 1.0f)
-        values.socialChatAutonomousContinuationPressureBase = 0.8f;
+        values.socialChatAutonomousContinuationPressureBase = 0.95f;
+    // Zero would read as "unset" at the gate and quietly restore the built-in rail; anything above
+    // the built-in cooldown would LENGTHEN it, which is not what this option is for.
+    if (values.socialChatAutonomousBotReplyCooldownSeconds == 0 ||
+        values.socialChatAutonomousBotReplyCooldownSeconds > 45)
+        values.socialChatAutonomousBotReplyCooldownSeconds = 3;
     if (!std::isfinite(values.socialChatWhisperMinFamiliarity) || values.socialChatWhisperMinFamiliarity <= 0.0f ||
         values.socialChatWhisperMinFamiliarity > 1.0f)
         values.socialChatWhisperMinFamiliarity = 0.01f;
@@ -58,9 +63,11 @@ void ReloadPlayerbotSocialConfig()
     values.socialChatAutonomousMaxConsecutiveBotTurns =
         sConfigMgr->GetOption<uint32>("PlayerbotsSocial.Autonomous.MaxConsecutiveBotTurns", 6);
     values.socialChatAutonomousBotTurnDecay =
-        sConfigMgr->GetOption<float>("PlayerbotsSocial.Autonomous.BotTurnDecay", 0.85f);
+        sConfigMgr->GetOption<float>("PlayerbotsSocial.Autonomous.BotTurnDecay", 0.95f);
     values.socialChatAutonomousContinuationPressureBase =
-        sConfigMgr->GetOption<float>("PlayerbotsSocial.Autonomous.ContinuationPressureBase", 0.8f);
+        sConfigMgr->GetOption<float>("PlayerbotsSocial.Autonomous.ContinuationPressureBase", 0.95f);
+    values.socialChatAutonomousBotReplyCooldownSeconds =
+        sConfigMgr->GetOption<uint32>("PlayerbotsSocial.Autonomous.BotReplyCooldownSeconds", 3);
     values.socialChatWhisperMinFamiliarity =
         sConfigMgr->GetOption<float>("PlayerbotsSocial.Whisper.MinFamiliarity", 0.01f);
     values.socialChatWhisperPairCooldownSeconds =

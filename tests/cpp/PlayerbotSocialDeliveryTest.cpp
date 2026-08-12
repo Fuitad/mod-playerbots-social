@@ -1110,6 +1110,53 @@ TEST(PlayerbotSocialDeliveryTest, RepeatedWordingAndFunctionAreSuppressedWithinO
     }
 }
 
+TEST(PlayerbotSocialDeliveryTest, TwoSpeakersMayExchangeTheSameContributionFunction)
+{
+    /*
+     * Two bots trading the same contribution function IS a conversation: banter answered with
+     * banter. The duplicate-function rail exists to stop ONE bot repeating itself, so it compares
+     * the speaker alongside the function; window 8 showed the speaker-blind version cutting a
+     * third of the delivered replies out of exactly the exchanges the oracle asks for.
+     */
+    PlayerbotSocialDeliveryConditions conditions = AllHold();
+    conditions.currentGrounding = Grounding();
+
+    PlayerbotSocialMgr coordinator;
+    RecordingProvider provider;
+    coordinator.SetSocialProvider(&provider);
+    GroundedThreadFixture const fixture = OpenGroundedThread(coordinator);
+
+    uint64 const firstToken = OpenGroundedRequest(coordinator, fixture);
+    PlayerbotSocialProviderResult first = Message("Still standing.", fixture.channel);
+    first.requestToken = firstToken;
+    ASSERT_EQ(coordinator.AcceptSocialResult(first, 100000, 3), PlayerbotSocialDeliveryRejection::None);
+    ASSERT_EQ(coordinator.CompleteDelivery(firstToken, conditions), PlayerbotSocialDeliveryRejection::None);
+
+    // A different bot answers in the same thread with the same function and different words.
+    PlayerbotSocialDeliveryRejection rejection = PlayerbotSocialDeliveryRejection::None;
+    uint64 const answerToken = coordinator.BeginSocialRequest(
+        501, StoredPersonality(), 0, fixture.channel, fixture.thread.publicId,
+        PlayerbotSocialRequestPriority::DirectHumanEngagement, 1000, REQUEST_ZONE_ID, std::string(), rejection, {},
+        900, true, fixture.currentLine, false, PlayerbotRoleplayPromptMode::Ordinary, fixture.grounding, false);
+    ASSERT_NE(answerToken, 0u);
+    PlayerbotSocialProviderResult answer = Message("Could have gone worse.", fixture.channel);
+    answer.requestToken = answerToken;
+    ASSERT_EQ(coordinator.AcceptSocialResult(answer, 200000, 3), PlayerbotSocialDeliveryRejection::None);
+    EXPECT_EQ(coordinator.CompleteDelivery(answerToken, conditions), PlayerbotSocialDeliveryRejection::None);
+
+    // The same bot repeating its own function on the next generated line is still refused.
+    uint64 const repeatToken = coordinator.BeginSocialRequest(
+        501, StoredPersonality(), 0, fixture.channel, fixture.thread.publicId,
+        PlayerbotSocialRequestPriority::DirectHumanEngagement, 1000, REQUEST_ZONE_ID, std::string(), rejection, {},
+        900, true, fixture.currentLine, false, PlayerbotRoleplayPromptMode::Ordinary, fixture.grounding, false);
+    ASSERT_NE(repeatToken, 0u);
+    PlayerbotSocialProviderResult repeat = Message("Anyone need water?", fixture.channel);
+    repeat.requestToken = repeatToken;
+    ASSERT_EQ(coordinator.AcceptSocialResult(repeat, 300000, 3), PlayerbotSocialDeliveryRejection::None);
+    EXPECT_EQ(coordinator.CompleteDelivery(repeatToken, conditions),
+              PlayerbotSocialDeliveryRejection::DuplicateFunction);
+}
+
 TEST(PlayerbotSocialDeliveryTest, AReplyWhoseExactParentAgedOutIsSuppressedByName)
 {
     PlayerbotSocialMgr coordinator;

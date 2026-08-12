@@ -256,8 +256,17 @@ PlayerbotSocialOpportunityRejection PlayerbotSocialEvaluateOpportunity(Playerbot
              PLAYERBOT_SOCIAL_THREAD_STALE_SECONDS))
         return PlayerbotSocialOpportunityRejection::ThreadStale;
 
+    /*
+     * Replies may carry a shorter cooldown (the autonomous stage sets one for bot-only threads,
+     * where the built-in 45s forbade the A-B-A alternation a real conversation is). Zero is an
+     * unset carrier and keeps the built-in rail; a starter always keeps it, because opening a new
+     * subject is exactly the speech the full pacing exists to space out.
+     */
+    uint64 const replyCooldownSeconds = !opportunity.starter && opportunity.replyCooldownSeconds != 0
+                                            ? opportunity.replyCooldownSeconds
+                                            : PLAYERBOT_SOCIAL_REPLY_COOLDOWN_SECONDS;
     if (opportunity.nowUnixSeconds < opportunity.botLastSpokeUnixSeconds ||
-        opportunity.nowUnixSeconds - opportunity.botLastSpokeUnixSeconds < PLAYERBOT_SOCIAL_REPLY_COOLDOWN_SECONDS)
+        opportunity.nowUnixSeconds - opportunity.botLastSpokeUnixSeconds < replyCooldownSeconds)
         return PlayerbotSocialOpportunityRejection::CooldownActive;
 
     if (opportunity.duplicateOfRecentMessage)
@@ -364,13 +373,23 @@ float PlayerbotSocialReplyPressure(PlayerbotSocialThreadPressure const& thread, 
      * early bot turns chain, and the moment a human participates the default base (plus the human
      * bonus) is authoritative again. An unusable carrier falls back exactly as the turn decay does.
      */
+    bool const botOnlyThread = thread.relevantHumanMessages == 0;
     bool const carriedBaseUsable = std::isfinite(thread.botOnlyContinuationBase) &&
                                    thread.botOnlyContinuationBase > 0.0f && thread.botOnlyContinuationBase <= 1.0f;
-    float const base = thread.relevantHumanMessages == 0 && carriedBaseUsable ? thread.botOnlyContinuationBase
-                                                                              : PLAYERBOT_SOCIAL_REPLY_PRESSURE_BASE;
+    float const base = botOnlyThread && carriedBaseUsable ? thread.botOnlyContinuationBase
+                                                          : PLAYERBOT_SOCIAL_REPLY_PRESSURE_BASE;
     float const participation = base + HumanParticipationBonus(thread.relevantHumanMessages);
-    float const throttled =
-        participation * (1.0f - PLAYERBOT_SOCIAL_REPLY_DENSITY_THROTTLE * ClampDensity(thread.channelDensity));
+
+    /*
+     * Every delivered turn raises the scope's density, so on a bot-only thread this throttle was a
+     * second decay stacked on the turn decay and the thread wound down twice as fast as the decay
+     * curve says. The autonomous stage exempts that lane (the turn decay and the consecutive-turn
+     * cap own its wind-down); a thread a human is part of always keeps the throttle.
+     */
+    float const densityThrottle = botOnlyThread && thread.botOnlyDensityThrottleExempt
+                                      ? 0.0f
+                                      : PLAYERBOT_SOCIAL_REPLY_DENSITY_THROTTLE * ClampDensity(thread.channelDensity);
+    float const throttled = participation * (1.0f - densityThrottle);
 
     return BoundPressure(ScaleByDensityProfile(throttled * ThreadDecay(thread), densityProfileMultiplier),
                          PLAYERBOT_SOCIAL_REPLY_PRESSURE_CEILING);

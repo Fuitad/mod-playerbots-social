@@ -24,15 +24,21 @@ PlayerbotsSocial.AmbientCadenceSeconds = 300
 
 # Applied only while the stage is autonomous_society. How many consecutive bot-only turns a thread
 # may run, and the per-turn pressure decay while it does. Earlier stages keep the built-in cap of 2
-# and decay of 0.62. Defaults: 6 and 0.85
+# and decay of 0.62. Defaults: 6 and 0.95
 PlayerbotsSocial.Autonomous.MaxConsecutiveBotTurns = 6
-PlayerbotsSocial.Autonomous.BotTurnDecay = 0.85
+PlayerbotsSocial.Autonomous.BotTurnDecay = 0.95
 
 # Participation base for a bot-only continuation while the stage is autonomous_society, so a bot
 # conversation's early turns continue with real probability and threads reach conversational
 # length. Threads a human participates in always use the built-in base of 0.45. Range (0, 1].
-# Default: 0.8
-PlayerbotsSocial.Autonomous.ContinuationPressureBase = 0.8
+# Default: 0.95
+PlayerbotsSocial.Autonomous.ContinuationPressureBase = 0.95
+
+# Reply cooldown for a bot answering in a BOT-ONLY thread while the stage is autonomous_society,
+# so two bots can alternate turns (the built-in 45s rail forbids A-B-A at conversational latency).
+# Any thread a human has spoken in keeps the built-in 45s cooldown. Range [1, 45]; out-of-range
+# values fall back. Default: 3
+PlayerbotsSocial.Autonomous.BotReplyCooldownSeconds = 3
 
 # Relationship-driven whisper check-ins, applied only while the stage is autonomous_society.
 # MinFamiliarity is how warm a pair must be before a bot may open a whisper; PairCooldownSeconds is

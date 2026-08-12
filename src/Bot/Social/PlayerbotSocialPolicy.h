@@ -252,6 +252,15 @@ struct PlayerbotSocialOpportunity
     // other whisper starter stays refused, keeping the channel reactive by default.
     bool relationshipDriven = false;
     PlayerbotSocialProfileLoadState profileLoadState = PlayerbotSocialProfileLoadState::Pending;
+
+    /*
+     * Reply cooldown carried per activation, seconds. Zero means the built-in cooldown. The
+     * autonomous stage sets a short one for BOT-ONLY replies so two bots can alternate turns (the
+     * built-in 45s made A-B-A structurally impossible at a ~5s turn latency in the small audiences
+     * that actually exist); starters ignore it, and any thread with human participation never
+     * carries one, so a bot still cannot pepper a player.
+     */
+    uint32 replyCooldownSeconds = 0;
 };
 
 /*
@@ -403,6 +412,15 @@ struct PlayerbotSocialThreadPressure
      * base, and earlier stages keep this at the default. Out-of-range values fall back on use.
      */
     float botOnlyContinuationBase = PLAYERBOT_SOCIAL_REPLY_PRESSURE_BASE;
+
+    /*
+     * When set, a BOT-ONLY continuation skips the channel-density reply throttle. Each delivered
+     * turn raises the scope's density, so the throttle acted as a second decay stacked on the
+     * turn decay (window 8 measured 0.37 where base x decay was 0.68) and bot threads wound down
+     * twice as fast as designed. The turn decay and the consecutive-turn cap own the wind-down in
+     * the autonomous stage; a thread with human participation always keeps the throttle.
+     */
+    bool botOnlyDensityThrottleExempt = false;
 };
 
 // Probability that an eligible bot should answer in this thread right now. Strictly inside (0, 1).

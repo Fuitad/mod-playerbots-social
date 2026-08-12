@@ -4371,7 +4371,14 @@ PlayerbotSocialActivationResult PlayerbotSocialMgr::Activate(PlayerbotSocialActi
         opportunity.duplicateOfRecentMessage = activation.duplicateOfRecentMessage;
         opportunity.consecutiveBotOnlyTurns = activation.consecutiveBotOnlyTurns;
         if (autonomousStage)
+        {
             opportunity.maxConsecutiveBotOnlyTurns = sPlayerbotSocialConfig.socialChatAutonomousMaxConsecutiveBotTurns;
+
+            // Bot-only threads only: a thread a human has spoken in, or a human line itself,
+            // keeps the built-in reply cooldown, so a bot can never pepper a player.
+            if (!activation.speakerIsHuman && activation.relevantHumanMessages == 0)
+                opportunity.replyCooldownSeconds = sPlayerbotSocialConfig.socialChatAutonomousBotReplyCooldownSeconds;
+        }
         opportunity.relationshipDriven = activation.relationshipDriven;
         opportunity.profileLoadState = candidate.profileLoadState;
 
@@ -4418,6 +4425,7 @@ PlayerbotSocialActivationResult PlayerbotSocialMgr::Activate(PlayerbotSocialActi
     {
         pressure.botOnlyTurnDecay = sPlayerbotSocialConfig.socialChatAutonomousBotTurnDecay;
         pressure.botOnlyContinuationBase = sPlayerbotSocialConfig.socialChatAutonomousContinuationPressureBase;
+        pressure.botOnlyDensityThrottleExempt = true;
     }
 
     PlayerbotSocialDensityMultipliers multipliers;
@@ -5654,7 +5662,8 @@ PlayerbotSocialDeliveryRejection PlayerbotSocialMgr::CompleteDelivery(
             thread->recentGeneratedLineHashes.end())
             verdict = PlayerbotSocialDeliveryRejection::DuplicateWording;
         else if (!thread->recentContributionFunctions.empty() &&
-                 thread->recentContributionFunctions.back() == pending->second.result.contribution)
+                 thread->recentContributionFunctions.back().function == pending->second.result.contribution &&
+                 thread->recentContributionFunctions.back().speakerGuidCounter == pending->second.botGuidCounter)
             verdict = PlayerbotSocialDeliveryRejection::DuplicateFunction;
 
         if (verdict == PlayerbotSocialDeliveryRejection::None)
@@ -5663,7 +5672,8 @@ PlayerbotSocialDeliveryRejection PlayerbotSocialMgr::CompleteDelivery(
             if (thread->recentGeneratedLineHashes.size() > PLAYERBOT_SOCIAL_MAX_THREAD_RECENT_LINES)
                 thread->recentGeneratedLineHashes.pop_front();
 
-            thread->recentContributionFunctions.push_back(pending->second.result.contribution);
+            thread->recentContributionFunctions.push_back(
+                {pending->second.botGuidCounter, pending->second.result.contribution});
             if (thread->recentContributionFunctions.size() > PLAYERBOT_SOCIAL_MAX_THREAD_RECENT_LINES)
                 thread->recentContributionFunctions.pop_front();
         }

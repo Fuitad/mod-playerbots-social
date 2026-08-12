@@ -554,6 +554,39 @@ TEST(PlayerbotSocialEligibilityTest, ABotExactlyAtTheCooldownBoundMaySpeak)
     EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(opportunity), PlayerbotSocialOpportunityRejection::None);
 }
 
+TEST(PlayerbotSocialEligibilityTest, ABotOnlyReplyHonoursTheCarriedShortCooldown)
+{
+    /*
+     * Window 8: after B answered A, the only possible turn-3 speaker was A (audiences of 1-2
+     * bots), and the built-in 45s cooldown refused it at a ~5s turn latency, so no thread could
+     * pass depth 2. The autonomous stage carries a short cooldown for bot-only replies; the
+     * carrier applies to replies only, and zero still means the built-in rail.
+     */
+    PlayerbotSocialOpportunity reply = EligibleReplyOpportunity();
+    reply.speakerIsHuman = false;
+    reply.botLastSpokeUnixSeconds = 995;
+    reply.nowUnixSeconds = 1000;
+
+    // Without a carrier the built-in cooldown still refuses a bot that spoke five seconds ago.
+    EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(reply), PlayerbotSocialOpportunityRejection::CooldownActive);
+
+    reply.replyCooldownSeconds = 3;
+    EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(reply), PlayerbotSocialOpportunityRejection::None);
+
+    // Still a cooldown, not an exemption: inside the carried window the bot is refused.
+    reply.botLastSpokeUnixSeconds = 998;
+    EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(reply), PlayerbotSocialOpportunityRejection::CooldownActive);
+
+    // A starter never uses the short carrier; new subjects keep the built-in pacing.
+    PlayerbotSocialOpportunity starter = EligibleReplyOpportunity();
+    starter.starter = true;
+    starter.speakerIsHuman = false;
+    starter.botLastSpokeUnixSeconds = 995;
+    starter.nowUnixSeconds = 1000;
+    starter.replyCooldownSeconds = 3;
+    EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(starter), PlayerbotSocialOpportunityRejection::CooldownActive);
+}
+
 TEST(PlayerbotSocialEligibilityTest, ACooldownIsNotBypassedByAClockThatMovedBackwards)
 {
     // A backwards clock would otherwise read as a very large elapsed time and release every bot at
@@ -1011,6 +1044,42 @@ TEST(PlayerbotSocialPressureTest, BotOnlyContinuationBaseLiftsEarlyTurnsWithoutT
     PlayerbotSocialThreadPressure corrupt = botOnly;
     corrupt.botOnlyContinuationBase = -1.0f;
     EXPECT_FLOAT_EQ(PlayerbotSocialReplyPressure(corrupt), PlayerbotSocialReplyPressure(botOnly));
+}
+
+TEST(PlayerbotSocialPressureTest, ABotOnlyContinuationSkipsTheChannelDensityThrottle)
+{
+    /*
+     * Every delivered turn raises the scope's density, so the density throttle acted as a second
+     * decay on top of the turn decay and bot-only threads wound down twice as fast as the decay
+     * curve says (window 8: turn-2 pressure 0.37 where base x decay was 0.68). The autonomous
+     * stage exempts bot-only continuations; the turn decay and the turn cap own the wind-down.
+     */
+    PlayerbotSocialThreadPressure thread;
+    thread.consecutiveBotOnlyTurns = 2;
+    thread.relevantHumanMessages = 0;
+    thread.lastActivityUnixSeconds = 1000;
+    thread.nowUnixSeconds = 1000;
+    thread.channelDensity = 100;
+    thread.botOnlyContinuationBase = 0.95f;
+    thread.botOnlyTurnDecay = 0.95f;
+
+    float const throttled = PlayerbotSocialReplyPressure(thread);
+
+    PlayerbotSocialThreadPressure exemptThread = thread;
+    exemptThread.botOnlyDensityThrottleExempt = true;
+    float const exempt = PlayerbotSocialReplyPressure(exemptThread);
+
+    EXPECT_GT(exempt, throttled);
+
+    // With the throttle gone the curve is exactly base x decay^turns: 0.95 x 0.95^2.
+    EXPECT_NEAR(exempt, 0.95f * 0.95f * 0.95f, 0.0001f);
+
+    // A thread a human is part of keeps the throttle whatever the flag says.
+    PlayerbotSocialThreadPressure humanThread = exemptThread;
+    humanThread.relevantHumanMessages = 1;
+    PlayerbotSocialThreadPressure humanThrottled = thread;
+    humanThrottled.relevantHumanMessages = 1;
+    EXPECT_FLOAT_EQ(PlayerbotSocialReplyPressure(humanThread), PlayerbotSocialReplyPressure(humanThrottled));
 }
 
 TEST(PlayerbotSocialPressureTest, StarterPressureRisesTowardCadenceAsAScopeStaysQuiet)

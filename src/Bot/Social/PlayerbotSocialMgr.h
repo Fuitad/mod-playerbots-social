@@ -1702,7 +1702,19 @@ private:
          */
         std::deque<uint64> recentLineHashes;
         std::deque<uint64> recentGeneratedLineHashes;
-        std::deque<PlayerbotSocialContributionFunction> recentContributionFunctions;
+
+        /*
+         * Who said a generated line and what it was doing, in order. The duplicate-function rail
+         * compares BOTH: one bot repeating its own function on consecutive generated lines is a
+         * monologue and refused, while two bots exchanging the same function is a conversation
+         * and delivers.
+         */
+        struct GeneratedContribution
+        {
+            uint64 speakerGuidCounter = 0;
+            PlayerbotSocialContributionFunction function = PlayerbotSocialContributionFunction::None;
+        };
+        std::deque<GeneratedContribution> recentContributionFunctions;
 
         /*
          * Raw chat, for idle memory extraction only, and the ONE place this class holds any.
