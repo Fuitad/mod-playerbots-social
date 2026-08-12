@@ -590,6 +590,50 @@ TEST(PlayerbotSocialEligibilityTest, AThirdConsecutiveBotTurnIsRejectedBeforePro
     continuation.consecutiveBotOnlyTurns = PLAYERBOT_SOCIAL_MAX_CONSECUTIVE_BOT_TURNS;
 
     EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(continuation), PlayerbotSocialOpportunityRejection::BotOnlyTurnLimit);
+}
+
+TEST(PlayerbotSocialEligibilityTest, AWhisperStarterIsAdmittedOnlyWhenRelationshipDriven)
+{
+    // Whisper stays reactive for every spontaneous starter; the one whisper a bot may open is the
+    // relationship-driven check-in, which carries its justification on the opportunity.
+    PlayerbotSocialOpportunity starter = EligibleReplyOpportunity();
+    starter.starter = true;
+    starter.speakerIsHuman = false;
+    starter.channel = PlayerbotSocialChannel::Whisper;
+
+    EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(starter),
+              PlayerbotSocialOpportunityRejection::StarterNotAllowedOnChannel);
+
+    starter.relationshipDriven = true;
+    EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(starter), PlayerbotSocialOpportunityRejection::None);
+}
+
+TEST(PlayerbotSocialEligibilityTest, ARelationshipDrivenWhisperStillHonoursInitiationOptOut)
+{
+    // Criterion: an opted-out bot never opens a whisper, however warm the relationship reads.
+    PlayerbotSocialOpportunity starter = EligibleReplyOpportunity();
+    starter.starter = true;
+    starter.speakerIsHuman = false;
+    starter.channel = PlayerbotSocialChannel::Whisper;
+    starter.relationshipDriven = true;
+    starter.botOptedOutOfInitiation = true;
+
+    EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(starter), PlayerbotSocialOpportunityRejection::InitiationOptedOut);
+}
+
+TEST(PlayerbotSocialEligibilityTest, TheBotOnlyTurnCapIsCarriedByTheOpportunity)
+{
+    // Autonomous threads raise the cap through the opportunity rather than a global: a fourth bot
+    // turn is admitted when the cap says six, and the raised cap still rejects at its own bound.
+    PlayerbotSocialOpportunity continuation = EligibleReplyOpportunity();
+    continuation.speakerIsHuman = false;
+    continuation.consecutiveBotOnlyTurns = 4;
+    continuation.maxConsecutiveBotOnlyTurns = 6;
+
+    EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(continuation), PlayerbotSocialOpportunityRejection::None);
+
+    continuation.consecutiveBotOnlyTurns = 6;
+    EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(continuation), PlayerbotSocialOpportunityRejection::BotOnlyTurnLimit);
 
     continuation.consecutiveBotOnlyTurns = PLAYERBOT_SOCIAL_MAX_CONSECUTIVE_BOT_TURNS - 1;
     EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(continuation), PlayerbotSocialOpportunityRejection::None);
@@ -794,6 +838,127 @@ TEST(PlayerbotSocialPressureTest, RisingDensityLowersBothPressuresAndStartersFas
 
     // The starter lane loses proportionally more of its pressure than the reply lane does.
     EXPECT_LT(busyStarter / quietStarter, busyReply / quietReply);
+}
+
+TEST(PlayerbotSocialBudgetTest, TheHourlyBudgetAdmitsUpToTheCapAndRefusesBeyondIt)
+{
+    PlayerbotSocialProviderBudgetState state;
+
+    for (uint64 call = 0; call < 5; ++call)
+        EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000 + call, 5),
+                  PlayerbotSocialBudgetDecision::Admitted);
+
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1010, 5), PlayerbotSocialBudgetDecision::Refused);
+
+    // The window slides: an hour after the first admissions the budget is available again.
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000 + 3601, 5), PlayerbotSocialBudgetDecision::Admitted);
+}
+
+TEST(PlayerbotSocialBudgetTest, SustainedOverrunTripsTheCircuit)
+{
+    // Demand at twice the budget inside one window is a runaway feedback loop, not a busy hour.
+    // The trip is the hard backstop the budget circuit exists for.
+    PlayerbotSocialProviderBudgetState state;
+
+    for (uint64 call = 0; call < 5; ++call)
+        EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 2000, 5), PlayerbotSocialBudgetDecision::Admitted);
+
+    for (uint64 refusal = 0; refusal < 4; ++refusal)
+        EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 2001, 5), PlayerbotSocialBudgetDecision::Refused);
+
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 2002, 5),
+              PlayerbotSocialBudgetDecision::RefusedCircuitTrip);
+}
+
+TEST(PlayerbotSocialBudgetTest, AZeroBudgetMeansUnlimited)
+{
+    // Zero is the operator saying "no ceiling", which must never mean "nothing may speak".
+    PlayerbotSocialProviderBudgetState state;
+
+    for (uint64 call = 0; call < 500; ++call)
+        EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 3000, 0), PlayerbotSocialBudgetDecision::Admitted);
+}
+
+TEST(PlayerbotSocialPressureTest, ReplyPressureTurnDecayIsConfigurablePerThread)
+{
+    /*
+     * Autonomous threads soften the per-turn decay so a bot conversation can reach four turns and
+     * beyond. The decay rides on the thread state, so earlier stages keep the default untouched.
+     */
+    PlayerbotSocialThreadPressure defaultDecay;
+    defaultDecay.consecutiveBotOnlyTurns = 4;
+    defaultDecay.lastActivityUnixSeconds = 1000;
+    defaultDecay.nowUnixSeconds = 1000;
+
+    PlayerbotSocialThreadPressure softenedDecay = defaultDecay;
+    softenedDecay.botOnlyTurnDecay = 0.85f;
+
+    float const hard = PlayerbotSocialReplyPressure(defaultDecay);
+    float const soft = PlayerbotSocialReplyPressure(softenedDecay);
+
+    EXPECT_GT(soft, hard);
+
+    // At the softened decay a fourth turn still has a workable chance of being answered rather than
+    // a token one: 0.45 * 0.85^4 is above a fifth.
+    EXPECT_GE(soft, 0.2f);
+}
+
+TEST(PlayerbotSocialPressureTest, StarterPressureRisesTowardCadenceAsAScopeStaysQuiet)
+{
+    /*
+     * The ambient contract: silence fills instead of decaying. A scope that just heard a line stays
+     * near-quiet, and starter pressure climbs with idle time until it saturates at the configured
+     * cadence, so a quiet channel converges on roughly one ambient line per cadence interval.
+     */
+    PlayerbotSocialThreadPressure justSpoke;
+    justSpoke.lastActivityUnixSeconds = 10000;
+    justSpoke.nowUnixSeconds = 10000;
+
+    PlayerbotSocialThreadPressure halfCadence = justSpoke;
+    halfCadence.nowUnixSeconds = 10000 + PLAYERBOT_SOCIAL_AMBIENT_CADENCE_DEFAULT_SECONDS / 2;
+
+    PlayerbotSocialThreadPressure atCadence = justSpoke;
+    atCadence.nowUnixSeconds = 10000 + PLAYERBOT_SOCIAL_AMBIENT_CADENCE_DEFAULT_SECONDS;
+
+    float const justSpokePressure = PlayerbotSocialStarterPressure(justSpoke);
+    float const halfCadencePressure = PlayerbotSocialStarterPressure(halfCadence);
+    float const atCadencePressure = PlayerbotSocialStarterPressure(atCadence);
+
+    EXPECT_LT(justSpokePressure, halfCadencePressure);
+    EXPECT_LT(halfCadencePressure, atCadencePressure);
+
+    // At the cadence point a quiet channel must actually be likely to speak, not just trend upward.
+    EXPECT_GE(atCadencePressure, 0.5f);
+}
+
+TEST(PlayerbotSocialPressureTest, StarterPressureAtCadenceStillThrottlesInABusyChannel)
+{
+    // The fill raises quiet scopes; it must not override the density throttle that keeps a busy
+    // channel from being talked over.
+    PlayerbotSocialThreadPressure quietAtCadence;
+    quietAtCadence.lastActivityUnixSeconds = 10000;
+    quietAtCadence.nowUnixSeconds = 10000 + PLAYERBOT_SOCIAL_AMBIENT_CADENCE_DEFAULT_SECONDS;
+    quietAtCadence.channelDensity = 0;
+
+    PlayerbotSocialThreadPressure busyAtCadence = quietAtCadence;
+    busyAtCadence.channelDensity = 100;
+
+    EXPECT_LT(PlayerbotSocialStarterPressure(busyAtCadence), PlayerbotSocialStarterPressure(quietAtCadence) / 2.0f);
+}
+
+TEST(PlayerbotSocialPressureTest, StarterPressureAfterBotTurnsRecoversWithIdleTime)
+{
+    /*
+     * Bot speech must not poison future ambient starters. A scope whose last thread ran several
+     * bot-only turns still refills toward cadence once it goes quiet, otherwise bot conversation
+     * suppresses the next conversation and the channel converges back on silence.
+     */
+    PlayerbotSocialThreadPressure afterBotThread;
+    afterBotThread.consecutiveBotOnlyTurns = 4;
+    afterBotThread.lastActivityUnixSeconds = 10000;
+    afterBotThread.nowUnixSeconds = 10000 + PLAYERBOT_SOCIAL_AMBIENT_CADENCE_DEFAULT_SECONDS;
+
+    EXPECT_GE(PlayerbotSocialStarterPressure(afterBotThread), 0.5f);
 }
 
 TEST(PlayerbotSocialPressureTest, AFullyCongestedChannelStillLeavesADirectReplyPossible)

@@ -9,6 +9,7 @@
 #include "Bot/Social/PlayerbotSocialMgr.h"
 #include "Bot/Social/PlayerbotSocialRoute.h"
 #include "Channel.h"
+#include "DBCStores.h"
 #include "GameTime.h"
 #include "Group.h"
 #include "ObjectAccessor.h"
@@ -138,6 +139,29 @@ void CaptureSocialListener(PlayerbotAI* botAI, Player* speaker, uint32 type, uin
                                sayCohortScopeId, replyToEventPublicId, sourceEventPublicId);
 }
 
+// Queues an ambient starter (zone arrival, death) for a managed bot. The subject is the zone the
+// moment happened in, which is what a passer-by could plausibly remark on.
+void QueueAmbientStarterSource(Player* player, PlayerbotSocialStarterSourceKind kind, uint32 zoneId)
+{
+    if (player == nullptr || !player->IsInWorld())
+        return;
+
+    PlayerbotAI* const botAI = GET_PLAYERBOT_AI(player);
+    if (botAI == nullptr || botAI->IsRealPlayer())
+        return;
+
+    AreaTableEntry const* zone = sAreaTableStore.LookupEntry(zoneId);
+    if (zone == nullptr || zone->area_name[0] == nullptr || *zone->area_name[0] == '\0')
+        return;
+
+    PlayerbotSocialStarterSource source;
+    source.kind = kind;
+    source.subjectId = zoneId;
+    source.subject = zone->area_name[0];
+
+    [[maybe_unused]] bool const queued = PlayerbotSocialQueueStarterSource(botAI, std::move(source));
+}
+
 class PlayerbotsSocialPlayerScript final : public PlayerScript
 {
 public:
@@ -145,8 +169,20 @@ public:
         : PlayerScript("PlayerbotsSocialPlayerScript",
                        {PLAYERHOOK_ON_LOGIN, PLAYERHOOK_ON_LOGOUT, PLAYERHOOK_CAN_PLAYER_USE_CHAT,
                         PLAYERHOOK_CAN_PLAYER_USE_PRIVATE_CHAT, PLAYERHOOK_CAN_PLAYER_USE_GROUP_CHAT,
-                        PLAYERHOOK_CAN_PLAYER_USE_CHANNEL_CHAT})
+                        PLAYERHOOK_CAN_PLAYER_USE_CHANNEL_CHAT, PLAYERHOOK_ON_UPDATE_ZONE,
+                        PLAYERHOOK_ON_PLAYER_JUST_DIED})
     {
+    }
+
+    void OnPlayerUpdateZone(Player* player, uint32 newZone, uint32 /*newArea*/) override
+    {
+        QueueAmbientStarterSource(player, PlayerbotSocialStarterSourceKind::ZoneArrival, newZone);
+    }
+
+    void OnPlayerJustDied(Player* player) override
+    {
+        if (player != nullptr)
+            QueueAmbientStarterSource(player, PlayerbotSocialStarterSourceKind::Death, player->GetZoneId());
     }
 
     void OnPlayerLogin(Player* player) override
@@ -283,6 +319,7 @@ public:
     {
         sPlayerbotSocialMgr.UpdateDatabaseWork(diff);
         PlayerbotSocialPumpStarters();
+        PlayerbotSocialPumpWhisperStarters();
         PlayerbotSocialPumpBiographies(diff);
         PlayerbotSocialDeliverDue();
     }

@@ -17,7 +17,11 @@ enum class PlayerbotSocialRolloutStage : uint8
 {
     HumanReplies = 0,
     GroundedStarters,
-    BoundedContinuation
+    BoundedContinuation,
+
+    // Bots keep a social world running among themselves: starters accept bot-only audiences and
+    // bot-only threads run past the two-turn cap. Every earlier stage keeps requiring a human.
+    AutonomousSociety
 };
 
 enum class PlayerbotSocialProfileLoadState : uint8
@@ -520,6 +524,10 @@ inline constexpr std::size_t PLAYERBOT_SOCIAL_DENSITY_PROFILE_COUNT = 3;
 struct PlayerbotSocialRuntimeControl
 {
     bool paused = false;
+
+    // The hard backstop. Opened by the budget governor on sustained overrun, closed only by an
+    // operator writing the row; while open the feature is silent exactly as a pause is.
+    bool budgetCircuitOpen = false;
     PlayerbotSocialDensityProfile density = PlayerbotSocialDensityProfile::Normal;
 
     /*

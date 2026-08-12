@@ -48,6 +48,18 @@ std::string_view StatementSql(PlayerbotSocialStatementId id)
                    "content, provenance, confidence, significance, privacy_scope, source_event_public_id, "
                    "source_thread_public_id, source_kind, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
                    "FROM_UNIXTIME(?))";
+        case PLAYERBOT_SOCIAL_STMT_INS_MODERATION_CASE:
+            /*
+             * The public id is derived from the (subject, category) pair, so a repeated campaign
+             * collides with its own case and bumps it rather than filing a duplicate. Status is not
+             * in the UPDATE arm: an acknowledged case that keeps occurring keeps counting without
+             * un-acknowledging itself, and the counts are what an operator reads.
+             */
+            return "INSERT INTO playerbot_social_moderation_case (public_id, subject_actor_id, category, "
+                   "occurrence_count, first_occurred_at, last_occurred_at, status, evidence) "
+                   "VALUES (?, ?, ?, ?, FROM_UNIXTIME(?), FROM_UNIXTIME(?), 'open', ?) "
+                   "ON DUPLICATE KEY UPDATE occurrence_count = occurrence_count + 1, "
+                   "last_occurred_at = VALUES(last_occurred_at), evidence = VALUES(evidence)";
         case PLAYERBOT_SOCIAL_STMT_INS_PROFILE:
             return "INSERT INTO playerbot_social_profile (bot_actor_id, schema_version, traits_version, "
                    "biography_state, biography_request_token, biography_attempted_at, biography, "
@@ -164,6 +176,16 @@ std::string_view StatementSql(PlayerbotSocialStatementId id)
             return "SELECT paused, density_profile, general_enabled, say_enabled, party_enabled, whisper_enabled, "
                    "budget_circuit_open, budget_circuit_reason, budget_circuit_opened_at "
                    "FROM playerbot_social_runtime_control WHERE id = 1";
+        case PLAYERBOT_SOCIAL_STMT_UPD_BUDGET_CIRCUIT:
+            // The mirror image of the control statement above: its UPDATE arm touches ONLY the
+            // circuit columns, so the governor can never overwrite an operator's pause, density, or
+            // channel choices while opening the backstop.
+            return "INSERT INTO playerbot_social_runtime_control (id, paused, density_profile, general_enabled, "
+                   "say_enabled, party_enabled, whisper_enabled, budget_circuit_open, budget_circuit_reason, "
+                   "budget_circuit_opened_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?)) "
+                   "ON DUPLICATE KEY UPDATE budget_circuit_open = VALUES(budget_circuit_open), "
+                   "budget_circuit_reason = VALUES(budget_circuit_reason), "
+                   "budget_circuit_opened_at = VALUES(budget_circuit_opened_at)";
         case PLAYERBOT_SOCIAL_STMT_UPD_MODERATION_CASE_ACK:
             return "UPDATE playerbot_social_moderation_case SET status = 'acknowledged', "
                    "acknowledged_at = FROM_UNIXTIME(?), acknowledged_by = ? WHERE public_id = ?";

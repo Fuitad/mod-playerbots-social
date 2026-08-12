@@ -52,6 +52,10 @@ struct PlayerbotSocialGate
     // the operator's, and only the deployment's can turn the feature on.
     bool paused = false;
 
+    // The budget governor's hard backstop; silences the feature exactly as a pause does, and only an
+    // operator closes it.
+    bool budgetCircuitOpen = false;
+
     /*
      * Which surfaces are still carrying, indexed by PlayerbotSocialChannel.
      *
@@ -477,6 +481,14 @@ inline constexpr std::size_t PLAYERBOT_SOCIAL_STARTER_SCOPES_PER_TICK = 2;
  * and hands GUID counters back to the coordinator, both of which are world thread only.
  */
 void PlayerbotSocialPumpStarters();
+
+// How many warm pairs one whisper scan considers. A bound on the walk, not a fairness guarantee:
+// the per-pair cooldown is what rotates attention across pairs between scans.
+inline constexpr std::size_t PLAYERBOT_SOCIAL_WHISPER_SCAN_PAIR_LIMIT = 64;
+
+// Relationship-driven whisper check-ins. Runs only in the autonomous_society stage, on a slow scan,
+// rationed per pair by the configured cooldown.
+void PlayerbotSocialPumpWhisperStarters();
 
 /*
  * Records one typed authoritative gameplay source and queues it only when a real current audience

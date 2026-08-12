@@ -9,6 +9,7 @@
 
 // The coordinator now owns profiles, so the persona types are part of its interface rather than
 // only an implementation detail of the file that composes them.
+#include <array>
 #include <cstddef>
 #include <deque>
 #include <functional>
@@ -20,6 +21,7 @@
 
 #include "Bot/Social/PlayerbotSocialControl.h"
 #include "Bot/Social/PlayerbotSocialExtraction.h"
+#include "Bot/Social/PlayerbotSocialModeration.h"
 #include "Bot/Social/PlayerbotSocialPersonality.h"
 #include "Bot/Social/PlayerbotSocialPolicy.h"
 #include "Bot/Social/PlayerbotSocialPromptContext.h"
@@ -144,8 +146,16 @@ enum class PlayerbotSocialStarterSourceKind : uint8
     Loot = 0,
     QuestTransition,
     Kill,
-    Level
+    Level,
+
+    // Ambient kinds, produced by the module's own player hooks rather than the bot event bus, so
+    // lines stop reading uniformly as grind reports.
+    ZoneArrival,
+    Death
 };
+
+// Bump when an enumerator is added above; the starter picker's rotation array is sized by it.
+inline constexpr std::size_t PLAYERBOT_SOCIAL_STARTER_SOURCE_KIND_COUNT = 6;
 
 enum class PlayerbotSocialQuestTransition : uint8
 {
@@ -172,15 +182,42 @@ struct PlayerbotSocialStarterSource
 [[nodiscard]] char const* PlayerbotSocialQuestTransitionName(PlayerbotSocialQuestTransition transition);
 [[nodiscard]] std::string PlayerbotSocialStarterGroundingSubject(PlayerbotSocialStarterSource const& source);
 
+/*
+ * Conversation relationship credits. Exchanging turns in a thread builds familiarity and a little
+ * affinity, never trust: trust stays earned through assistance. Only a bot may own a credit, so a
+ * ledger is never kept on a person's behalf; a human can appear only as the subject a bot warmed
+ * toward. The consent gate and the per-pair window ceiling both live in ApplyRelationshipDelta,
+ * which every credit is applied through.
+ */
+inline constexpr float PLAYERBOT_SOCIAL_CONVERSATION_FAMILIARITY_DELTA = 0.004f;
+inline constexpr float PLAYERBOT_SOCIAL_CONVERSATION_AFFINITY_DELTA = 0.003f;
+
+struct PlayerbotSocialConversationCredit
+{
+    uint64 botGuidCounter = 0;
+    uint64 subjectGuidCounter = 0;
+    PlayerbotSocialRelationshipValues delta;
+};
+
+[[nodiscard]] std::vector<PlayerbotSocialConversationCredit> PlayerbotSocialConversationCredits(
+    uint64 speakerGuidCounter, bool speakerIsHuman, uint64 previousSpeakerGuidCounter, bool previousSpeakerWasHuman);
+
 struct PlayerbotSocialStarterAudience
 {
     bool hasRealPartyMember = false;
     bool hasRealSayListener = false;
     bool hasRealGeneralMember = false;
+
+    // Bot fallbacks, consulted only when the caller allows bot audiences (the autonomous society
+    // stage). A real human anywhere still outranks every one of these.
+    bool hasBotPartyMember = false;
+    bool hasBotSayListener = false;
+    bool hasBotGeneralMember = false;
 };
 
 [[nodiscard]] bool PlayerbotSocialSelectStarterChannel(PlayerbotSocialStarterAudience const& audience,
-                                                       PlayerbotSocialChannel& channel);
+                                                       PlayerbotSocialChannel& channel,
+                                                       bool allowBotAudiences = false);
 
 struct PlayerbotSocialStarterContext
 {
@@ -192,6 +229,16 @@ struct PlayerbotSocialStarterContext
     uint32 zoneId = 0;
     uint64 atUnixSeconds = 0;
 };
+
+/*
+ * Which pending starter a scope speaks about this pass. Kill and loot events vastly outnumber
+ * everything else, so chasing freshness alone converges on every line being a grind report: the
+ * kind spoken about longest ago wins first, and freshness only breaks ties inside that choice.
+ * The caller guarantees a non-empty list.
+ */
+[[nodiscard]] std::size_t PlayerbotSocialPickStarterContext(
+    std::vector<PlayerbotSocialStarterContext> const& starters,
+    std::array<uint64, PLAYERBOT_SOCIAL_STARTER_SOURCE_KIND_COUNT> const& lastSpokenAtByKind);
 
 /*
  * A handle to an inferred thread. `threadId` is the process local key and `publicId` is the opaque
@@ -354,6 +401,10 @@ struct PlayerbotSocialActivation
     uint64 starterSourceBotGuidCounter = 0;
     uint64 starterAudienceGuidCounter = 0;
     std::string starterSourceEventPublicId;
+
+    // True only for the relationship-driven whisper check-in; carried onto every candidate's
+    // opportunity so the whisper starter gate can admit it.
+    bool relationshipDriven = false;
 
     bool duplicateOfRecentMessage = false;
 
@@ -1541,6 +1592,26 @@ public:
      * process does not load stored relationships, so anything it computed from its own snapshot would
      * overwrite accumulated history with a value derived from an empty one.
      */
+    /*
+     * The server-wide provider budget. True admits the call and stamps the window; false refuses
+     * it, and a sustained overrun opens the durable budget circuit as the backstop. World thread
+     * only, like every other admission decision here.
+     */
+    bool AdmitProviderCall(uint64 nowUnixSeconds);
+
+    // Opens the durable backstop: flips the runtime control's circuit, persists the circuit columns
+    // (and only those), and says so loudly. Idempotent while already open.
+    void OpenBudgetCircuit(std::string_view reason, uint64 nowUnixSeconds);
+
+    /*
+     * Rations relationship-driven whisper starters to one attempt per pair per cooldown window.
+     * Returns true and stamps the window when the pair may attempt now. The map is transient and
+     * evicts like the encounter maps do: losing a stamp costs at most one early whisper, never a
+     * bound that matters.
+     */
+    bool NoteWhisperStarterAttempt(PlayerbotSocialRelationshipKey const& key, uint64 nowUnixSeconds,
+                                   uint64 cooldownSeconds);
+
     PlayerbotSocialRelationshipValues ApplyRelationshipDelta(uint64 botGuidCounter, uint64 subjectGuidCounter,
                                                              PlayerbotSocialRelationshipValues const& delta,
                                                              uint64 nowUnixSeconds);
@@ -1575,6 +1646,11 @@ private:
         uint32 relevantHumanMessages = 0;
         std::deque<uint64> participants;
         std::deque<std::string> recentEventIds;
+
+        // Who spoke last, for the conversation relationship credit: an observed turn pairs its
+        // speaker with the previous one. Zero until the thread has heard anyone.
+        uint64 lastSpeakerGuidCounter = 0;
+        bool lastSpeakerWasHuman = false;
 
         /*
          * Recent lines, as hashes of their normalized text rather than the text itself.
@@ -1812,6 +1888,27 @@ private:
      * for the rest of the uptime.
      */
     std::map<PlayerbotSocialRelationshipKey, PlayerbotSocialAssistanceCredit> _assistanceCredit;
+
+    // Last relationship-driven whisper attempt per pair. Transient and evicting: see
+    // NoteWhisperStarterAttempt.
+    std::map<PlayerbotSocialRelationshipKey, uint64> _whisperStarterAttempts;
+
+    // The sliding-window provider budget ledger AdmitProviderCall rules from.
+    PlayerbotSocialProviderBudgetState _providerBudget;
+
+    // Hostile-line tallies per (abused bot, category). Transient and evicting like the whisper
+    // stamps: losing one costs a campaign a fresh count, never a durable record.
+    std::map<std::pair<uint64, PlayerbotSocialModerationCategory>, PlayerbotSocialModerationTally>
+        _moderationTallies;
+
+    /*
+     * One classified hostile line aimed at a bot. Tallies it, and at the category's opening
+     * threshold opens or bumps the durable moderation case with bounded evidence. The subject is
+     * the bot the line was aimed at; the speaker is who said it.
+     */
+    void NoteHostileLine(uint64 subjectGuidCounter, uint64 speakerGuidCounter,
+                         PlayerbotSocialModerationCategory category, std::string const& text,
+                         uint64 nowUnixSeconds);
 
     /*
      * When each pair's opposition was last answered, so a fight costs the attacker once rather than

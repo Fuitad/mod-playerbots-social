@@ -88,6 +88,23 @@ PlayerbotSocialRelationshipValues PlayerbotSocialRelationshipStore::Recall(
     return found->second;
 }
 
+std::vector<PlayerbotSocialWarmRelationship> PlayerbotSocialRelationshipStore::WarmRelationships(
+    float minFamiliarity, std::size_t limit) const
+{
+    std::vector<PlayerbotSocialWarmRelationship> warm;
+
+    for (auto const& [key, values] : _relationships)
+    {
+        if (warm.size() >= limit)
+            break;
+
+        if (values.familiarity >= minFamiliarity)
+            warm.push_back({key, values});
+    }
+
+    return warm;
+}
+
 std::size_t PlayerbotSocialRelationshipStore::TrackedRelationshipCount() const { return _relationships.size(); }
 
 std::size_t PlayerbotSocialRelationshipStore::Forget(uint64 characterGuidCounter)
@@ -391,6 +408,18 @@ PlayerbotSocialRelationshipValues PlayerbotSocialStateStore::RecallRelationship(
         return PlayerbotSocialRelationshipValues{};
 
     return _relationships.Recall(key);
+}
+
+std::vector<PlayerbotSocialWarmRelationship> PlayerbotSocialStateStore::WarmRelationships(float minFamiliarity,
+                                                                                          std::size_t limit) const
+{
+    std::vector<PlayerbotSocialWarmRelationship> warm;
+
+    for (PlayerbotSocialWarmRelationship const& candidate : _relationships.WarmRelationships(minFamiliarity, limit))
+        if (PairParticipates(candidate.key))
+            warm.push_back(candidate);
+
+    return warm;
 }
 
 PlayerbotSocialMemoryRejection PlayerbotSocialStateStore::RememberMemory(PlayerbotSocialMemoryRecord const& record)

@@ -259,6 +259,8 @@ PlayerbotSocialRolloutStage PlayerbotSocialParseRolloutStage(std::string_view te
         return PlayerbotSocialRolloutStage::GroundedStarters;
     if (normalized == "bounded_continuation")
         return PlayerbotSocialRolloutStage::BoundedContinuation;
+    if (normalized == "autonomous_society")
+        return PlayerbotSocialRolloutStage::AutonomousSociety;
     return PlayerbotSocialRolloutStage::HumanReplies;
 }
 
@@ -272,6 +274,8 @@ char const* PlayerbotSocialRolloutStageName(PlayerbotSocialRolloutStage stage)
             return "grounded_presence";
         case PlayerbotSocialRolloutStage::BoundedContinuation:
             return "bounded_continuation";
+        case PlayerbotSocialRolloutStage::AutonomousSociety:
+            return "autonomous_society";
     }
 
     return "unknown";
@@ -327,7 +331,10 @@ PlayerbotSocialGate PlayerbotSocialEffectiveGate()
     return PlayerbotSocialOverlayRuntimeControl(configured, sPlayerbotSocialMgr.RuntimeControl());
 }
 
-bool PlayerbotSocialGateIsLive(PlayerbotSocialGate const& gate) { return gate.enabled && !gate.paused; }
+bool PlayerbotSocialGateIsLive(PlayerbotSocialGate const& gate)
+{
+    return gate.enabled && !gate.paused && !gate.budgetCircuitOpen;
+}
 
 PlayerbotSocialGate PlayerbotSocialOverlayRuntimeControl(PlayerbotSocialGate const& configured,
                                                          PlayerbotSocialRuntimeControl const& control)
@@ -340,6 +347,7 @@ PlayerbotSocialGate PlayerbotSocialOverlayRuntimeControl(PlayerbotSocialGate con
      */
     PlayerbotSocialGate gate = configured;
     gate.paused = control.paused;
+    gate.budgetCircuitOpen = control.budgetCircuitOpen;
     gate.density = control.density;
     gate.channelEnabled = control.channelEnabled;
     return gate;
@@ -455,10 +463,11 @@ PlayerbotSocialInboundDecision PlayerbotSocialRouteInbound(ChatChannelSource sou
          * one-line monologue. The continuation-only route above remains the narrow answer when the
          * operator silenced the channel between accepting and observing an already delivered line.
          */
-        decision.route =
-            context.originatedFromSocialDelivery && gate.stage != PlayerbotSocialRolloutStage::BoundedContinuation
-                ? PlayerbotSocialInboundRoute::ThreadContinuationOnly
-                : PlayerbotSocialInboundRoute::SocialOpportunity;
+        bool const deliveredLinesMayOpen = gate.stage == PlayerbotSocialRolloutStage::BoundedContinuation ||
+                                           gate.stage == PlayerbotSocialRolloutStage::AutonomousSociety;
+        decision.route = context.originatedFromSocialDelivery && !deliveredLinesMayOpen
+                             ? PlayerbotSocialInboundRoute::ThreadContinuationOnly
+                             : PlayerbotSocialInboundRoute::SocialOpportunity;
         return decision;
     }
 
@@ -1512,8 +1521,28 @@ bool PlayerbotSocialQueueStarterSource(PlayerbotAI* sourceAI, PlayerbotSocialSta
     uint64 partyAudienceGuidCounter = 0;
     uint64 sayAudienceGuidCounter = 0;
     uint64 generalAudienceGuidCounter = 0;
+    uint64 botPartyAudienceGuidCounter = 0;
+    uint64 botSayAudienceGuidCounter = 0;
+    uint64 botGeneralAudienceGuidCounter = 0;
     std::vector<uint64> sayCohortGuidCounters;
     sayCohortGuidCounters.push_back(sourceBot->GetGUID().GetCounter());
+
+    auto const isInGeneralChannel = [](Player* candidate)
+    {
+        ChannelMgr* const channelMgr = ChannelMgr::forTeam(candidate->GetTeamId());
+        if (channelMgr == nullptr)
+            return false;
+
+        for (auto const& channelEntry : channelMgr->GetChannels())
+        {
+            Channel* const joined = channelEntry.second;
+            if (joined != nullptr && joined->GetChannelId() == ChatChannelId::GENERAL &&
+                candidate->IsInChannel(joined))
+                return true;
+        }
+
+        return false;
+    };
 
     for (auto const& [guid, candidate] : ObjectAccessor::GetPlayers())
     {
@@ -1531,8 +1560,29 @@ bool PlayerbotSocialQueueStarterSource(PlayerbotAI* sourceAI, PlayerbotSocialSta
         if (withinSay)
             sayCohortGuidCounters.push_back(guid.GetCounter());
 
-        if (!characterIsHuman || sPlayerbotSocialMgr.IsOptedOut(guid.GetCounter()))
+        if (sPlayerbotSocialMgr.IsOptedOut(guid.GetCounter()))
             continue;
+
+        /*
+         * Bot audiences are collected on the same shape as the human ones, and consulted only when
+         * the autonomous stage allows them at channel selection below. Collecting unconditionally
+         * costs nothing in earlier stages and keeps the two scans from drifting apart.
+         */
+        if (!characterIsHuman)
+        {
+            if (sourceBot->GetGroup() != nullptr && candidate->GetGroup() == sourceBot->GetGroup() &&
+                botPartyAudienceGuidCounter == 0)
+                botPartyAudienceGuidCounter = guid.GetCounter();
+
+            if (withinSay && botSayAudienceGuidCounter == 0)
+                botSayAudienceGuidCounter = guid.GetCounter();
+
+            if (candidate->GetZoneId() == sourceBot->GetZoneId() && botGeneralAudienceGuidCounter == 0 &&
+                isInGeneralChannel(candidate))
+                botGeneralAudienceGuidCounter = guid.GetCounter();
+
+            continue;
+        }
 
         if (sourceBot->GetGroup() != nullptr && candidate->GetGroup() == sourceBot->GetGroup() &&
             partyAudienceGuidCounter == 0)
@@ -1541,29 +1591,22 @@ bool PlayerbotSocialQueueStarterSource(PlayerbotAI* sourceAI, PlayerbotSocialSta
         if (withinSay && sayAudienceGuidCounter == 0)
             sayAudienceGuidCounter = guid.GetCounter();
 
-        if (candidate->GetZoneId() == sourceBot->GetZoneId() && generalAudienceGuidCounter == 0)
-        {
-            ChannelMgr* const channelMgr = ChannelMgr::forTeam(candidate->GetTeamId());
-            if (channelMgr != nullptr)
-                for (auto const& channelEntry : channelMgr->GetChannels())
-                {
-                    Channel* const joined = channelEntry.second;
-                    if (joined != nullptr && joined->GetChannelId() == ChatChannelId::GENERAL &&
-                        candidate->IsInChannel(joined))
-                    {
-                        generalAudienceGuidCounter = guid.GetCounter();
-                        break;
-                    }
-                }
-        }
+        if (candidate->GetZoneId() == sourceBot->GetZoneId() && generalAudienceGuidCounter == 0 &&
+            isInGeneralChannel(candidate))
+            generalAudienceGuidCounter = guid.GetCounter();
     }
 
     audience.hasRealPartyMember = partyAudienceGuidCounter != 0;
     audience.hasRealSayListener = sayAudienceGuidCounter != 0;
     audience.hasRealGeneralMember = generalAudienceGuidCounter != 0;
+    audience.hasBotPartyMember = botPartyAudienceGuidCounter != 0;
+    audience.hasBotSayListener = botSayAudienceGuidCounter != 0;
+    audience.hasBotGeneralMember = botGeneralAudienceGuidCounter != 0;
+
+    bool const allowBotAudiences = gate.stage == PlayerbotSocialRolloutStage::AutonomousSociety;
 
     PlayerbotSocialStarterContext starter;
-    if (!PlayerbotSocialSelectStarterChannel(audience, starter.key.channel))
+    if (!PlayerbotSocialSelectStarterChannel(audience, starter.key.channel, allowBotAudiences))
         return false;
 
     starter.botGuidCounter = sourceBot->GetGUID().GetCounter();
@@ -1571,20 +1614,26 @@ bool PlayerbotSocialQueueStarterSource(PlayerbotAI* sourceAI, PlayerbotSocialSta
     starter.zoneId = sourceBot->GetZoneId();
     starter.atUnixSeconds = nowUnixSeconds;
 
+    // The human audience owns the slot when one exists; the bot audience carries it otherwise.
+    // Selection above only picks a channel whose chosen tier is populated, so the fallback here can
+    // never resurrect a channel the selection refused.
     switch (starter.key.channel)
     {
         case PlayerbotSocialChannel::Party:
             starter.key.scopeId = sourceBot->GetGroup() == nullptr ? 0 : sourceBot->GetGroup()->GetGUID().GetCounter();
-            starter.audienceGuidCounter = partyAudienceGuidCounter;
+            starter.audienceGuidCounter =
+                partyAudienceGuidCounter != 0 ? partyAudienceGuidCounter : botPartyAudienceGuidCounter;
             break;
         case PlayerbotSocialChannel::Say:
             starter.key.scopeId = PlayerbotSocialResolveSayCohort(sayCohortGuidCounters, nowUnixSeconds);
-            starter.audienceGuidCounter = sayAudienceGuidCounter;
+            starter.audienceGuidCounter =
+                sayAudienceGuidCounter != 0 ? sayAudienceGuidCounter : botSayAudienceGuidCounter;
             starter.sayCohortGuidCounters = std::move(sayCohortGuidCounters);
             break;
         case PlayerbotSocialChannel::General:
             starter.key.scopeId = sourceBot->GetZoneId();
-            starter.audienceGuidCounter = generalAudienceGuidCounter;
+            starter.audienceGuidCounter =
+                generalAudienceGuidCounter != 0 ? generalAudienceGuidCounter : botGeneralAudienceGuidCounter;
             break;
         case PlayerbotSocialChannel::Whisper:
             return false;
@@ -1654,10 +1703,18 @@ void PlayerbotSocialPumpStarters()
         if (starters.empty())
             continue;
 
-        // The same freshest subject drives selection and generation, so the selected bot is
-        // interested in the thing it will actually be asked to discuss.
-        PlayerbotSocialStarterContext const& starter = starters.back();
+        /*
+         * The rotation stamps survive between ticks so kinds actually alternate; world thread only,
+         * like the scope cursor above. The same picked subject drives selection and generation, so
+         * the selected bot is interested in the thing it will actually be asked to discuss.
+         */
+        static std::array<uint64, PLAYERBOT_SOCIAL_STARTER_SOURCE_KIND_COUNT> lastSpokenAtByKind{};
+
+        PlayerbotSocialStarterContext const& starter =
+            starters[PlayerbotSocialPickStarterContext(starters, lastSpokenAtByKind)];
         std::string const starterSubject = PlayerbotSocialStarterGroundingSubject(starter.source);
+        if (static_cast<std::size_t>(starter.source.kind) < PLAYERBOT_SOCIAL_STARTER_SOURCE_KIND_COUNT)
+            lastSpokenAtByKind[static_cast<std::size_t>(starter.source.kind)] = nowUnixSeconds;
 
         PlayerbotSocialThreadHandle const thread = sPlayerbotSocialMgr.OpenStarterThread(starter, nowUnixSeconds);
         if (!thread.valid)
@@ -1666,7 +1723,12 @@ void PlayerbotSocialPumpStarters()
         uint32 const zoneId = starter.zoneId;
         Player* const audience = ObjectAccessor::FindPlayerByLowGUID(starter.audienceGuidCounter);
         PlayerbotAI* const audienceAI = audience == nullptr ? nullptr : GET_PLAYERBOT_AI(audience);
-        if (audience == nullptr || !audience->IsInWorld() || (audienceAI != nullptr && !audienceAI->IsRealPlayer()) ||
+
+        // In the autonomous society stage a managed bot is a valid audience; every earlier stage
+        // still demands the real player the starter was admitted against.
+        bool const audienceIsBot = audienceAI != nullptr && !audienceAI->IsRealPlayer();
+        bool const botAudienceAcceptable = gate.stage == PlayerbotSocialRolloutStage::AutonomousSociety;
+        if (audience == nullptr || !audience->IsInWorld() || (audienceIsBot && !botAudienceAcceptable) ||
             sPlayerbotSocialMgr.IsOptedOut(starter.audienceGuidCounter))
             continue;
 
@@ -1813,6 +1875,139 @@ void PlayerbotSocialPumpStarters()
         activation.candidates = candidates;
 
         sPlayerbotSocialMgr.Activate(activation, gate.density);
+    }
+}
+
+void PlayerbotSocialPumpWhisperStarters()
+{
+    PlayerbotSocialGate const gate = PlayerbotSocialEffectiveGate();
+    if (!PlayerbotSocialGateIsLive(gate) || gate.stage != PlayerbotSocialRolloutStage::AutonomousSociety ||
+        !gate.channelEnabled[static_cast<std::size_t>(PlayerbotSocialChannel::Whisper)])
+        return;
+
+    uint64 const nowUnixSeconds = static_cast<uint64>(time(nullptr));
+
+    // A slow scan, not a per-tick one: the warm-pair walk and the world lookups below are not worth
+    // paying two hundred times a second for a behavior meant to fire a few times an hour.
+    static uint64 lastScanUnixSeconds = 0;
+    if (lastScanUnixSeconds != 0 && nowUnixSeconds >= lastScanUnixSeconds && nowUnixSeconds - lastScanUnixSeconds < 30)
+        return;
+    lastScanUnixSeconds = nowUnixSeconds;
+
+    std::vector<PlayerbotSocialWarmRelationship> const warm = sPlayerbotSocialMgr.State().WarmRelationships(
+        sPlayerbotSocialConfig.socialChatWhisperMinFamiliarity, PLAYERBOT_SOCIAL_WHISPER_SCAN_PAIR_LIMIT);
+
+    for (PlayerbotSocialWarmRelationship const& pair : warm)
+    {
+        Player* const bot =
+            ObjectAccessor::FindPlayer(ObjectGuid::Create<HighGuid::Player>(pair.key.botGuidCounter));
+        if (bot == nullptr || !bot->IsInWorld() || bot->InBattleground())
+            continue;
+
+        PlayerbotAI* const botAI = GET_PLAYERBOT_AI(bot);
+        if (botAI == nullptr || botAI->IsRealPlayer())
+            continue;
+
+        Player* const target =
+            ObjectAccessor::FindPlayer(ObjectGuid::Create<HighGuid::Player>(pair.key.subjectGuidCounter));
+        if (target == nullptr || !target->IsInWorld() || target->GetTeamId() != bot->GetTeamId())
+            continue;
+
+        // The manager's fail-closed consent check, on both ends, exactly as the public starter path
+        // applies it to its audience.
+        if (sPlayerbotSocialMgr.IsOptedOut(pair.key.botGuidCounter) ||
+            sPlayerbotSocialMgr.IsOptedOut(pair.key.subjectGuidCounter))
+            continue;
+
+        // Stamped only after every cheaper refusal above, so a pair that could not whisper anyway
+        // does not burn its window finding that out.
+        if (!sPlayerbotSocialMgr.NoteWhisperStarterAttempt(pair.key, nowUnixSeconds,
+                                                           sPlayerbotSocialConfig.socialChatWhisperPairCooldownSeconds))
+            continue;
+
+        PlayerbotSocialThreadKey key;
+        key.channel = PlayerbotSocialChannel::Whisper;
+        key.scopeId = PlayerbotSocialWhisperScopeId(pair.key.botGuidCounter, pair.key.subjectGuidCounter);
+
+        PlayerbotSocialThreadHandle const thread = sPlayerbotSocialMgr.OpenStarterThread(key, nowUnixSeconds);
+        if (!thread.valid)
+            continue;
+
+        std::string const starterSubject = "checking in on " + target->GetName();
+
+        PlayerbotSocialActivationCandidate candidate;
+        candidate.botGuidCounter = pair.key.botGuidCounter;
+        candidate.profileLoadState = sPlayerbotSocialMgr.ProfileLoadFor(pair.key.botGuidCounter).state;
+        std::optional<PlayerbotPersonalityProfile> const personality =
+            sPlayerbotPersonalityMgr.GetOrCreate(pair.key.botGuidCounter);
+        if (!personality.has_value())
+            continue;
+        candidate.personality = *personality;
+
+        // Scored against the relationship itself: the warmth that justified the whisper is the
+        // stance the line is spoken with.
+        PlayerbotSocialProfile const& profile = sPlayerbotSocialMgr.ProfileFor(pair.key.botGuidCounter);
+        candidate.effectiveDisposition =
+            PlayerbotSocialEngagementDisposition(personality->sociability, profile.traits.warmth, pair.values);
+        candidate.stance = PlayerbotSocialStanceFor(candidate.effectiveDisposition, pair.values);
+        candidate.addressedByName = false;
+        candidate.contentRelevance = PlayerbotPersonality::SocialContentRelevance(profile, starterSubject);
+        candidate.optedOutOfInitiation = sPlayerbotSocialMgr.State().IsOptedOut(pair.key.botGuidCounter);
+        candidate.lastSpokeUnixSeconds = PlayerbotSocialLastSpokeAt(pair.key.botGuidCounter);
+        candidate.participatedInThread = false;
+        candidate.factionMatches = true;
+        candidate.languageMatches = true;
+        if (!candidate.optedOutOfInitiation)
+            candidate.nearby = CaptureNearbySnapshot(bot, PlayerbotSocialChannel::Whisper);
+        candidate.grounding = CaptureGroundingEnvelope(bot, target, thread, PlayerbotSocialChannel::Whisper,
+                                                       candidate.profileLoadState, nowUnixSeconds, starterSubject);
+
+        // The telemetry trail every other starter leaves: who wanted to speak, to whom, and why.
+        PlayerbotSocialEventDraft sourceEvent;
+        sourceEvent.eventPublicId = sPlayerbotSocialMgr.ReserveDeliveryEventPublicId(pair.key.botGuidCounter);
+        sourceEvent.eventType = "social.source";
+        sourceEvent.origin = PlayerbotSocialEventOrigin::Social;
+        sourceEvent.outcome = PlayerbotSocialEventOutcome::Recorded;
+        sourceEvent.channel = PlayerbotSocialChannel::Whisper;
+        sourceEvent.hasChannel = true;
+        sourceEvent.botGuidCounter = pair.key.botGuidCounter;
+        sourceEvent.targetGuidCounter = pair.key.subjectGuidCounter;
+        sourceEvent.zoneId = bot->GetZoneId();
+        sourceEvent.reason = "relationship";
+        sourceEvent.occurredAtUnixSeconds = nowUnixSeconds;
+        std::string const sourceEventPublicId = sourceEvent.eventPublicId;
+        sPlayerbotSocialMgr.RecordEvent(std::move(sourceEvent));
+
+        PlayerbotSocialThreadPressure const pressure = sPlayerbotSocialMgr.PressureFor(thread, nowUnixSeconds);
+
+        PlayerbotSocialActivation activation;
+        activation.thread = thread;
+        activation.channel = PlayerbotSocialChannel::Whisper;
+        activation.starter = true;
+        activation.relationshipDriven = true;
+        activation.starterSourceBotGuidCounter = pair.key.botGuidCounter;
+        activation.starterAudienceGuidCounter = pair.key.subjectGuidCounter;
+        activation.starterSourceEventPublicId = sourceEventPublicId;
+        activation.speakerGuidCounter = 0;
+        activation.speakerIsHuman = false;
+        activation.speakerOptedOut = false;
+        activation.duplicateOfRecentMessage = false;
+        activation.starterSubject = starterSubject;
+        activation.zoneId = bot->GetZoneId();
+        activation.channelDensity = pressure.channelDensity;
+        activation.threadLastActivityUnixSeconds = pressure.lastActivityUnixSeconds;
+        activation.relevantHumanMessages = pressure.relevantHumanMessages;
+        activation.consecutiveBotOnlyTurns = pressure.consecutiveBotOnlyTurns;
+        activation.nowUnixSeconds = nowUnixSeconds;
+        activation.selectionSeed =
+            PlayerbotPersonality::SplitMix64(thread.threadId ^ (nowUnixSeconds << 1) ^ key.scopeId);
+        activation.candidates = {candidate};
+
+        sPlayerbotSocialMgr.Activate(activation, gate.density);
+
+        // One check-in per scan, server-wide. Occasional is the contract, and the per-pair cooldown
+        // above makes the next scan pick a different pair rather than this one again.
+        break;
     }
 }
 

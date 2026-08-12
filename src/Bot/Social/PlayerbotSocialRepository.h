@@ -68,12 +68,24 @@ using PlayerbotSocialRelationshipMatch = std::function<bool(PlayerbotSocialRelat
  * which is the point at which `PlayerbotSocialClampRelationship` stops being merely available and
  * starts being enforced: a caller cannot reach stored state with an out of range or NaN value.
  */
+// One warm pair, as WarmRelationships answers it: the key plus the values that qualified it.
+struct PlayerbotSocialWarmRelationship
+{
+    PlayerbotSocialRelationshipKey key;
+    PlayerbotSocialRelationshipValues values;
+};
+
 class PlayerbotSocialRelationshipStore
 {
 public:
     void Remember(PlayerbotSocialRelationshipKey const& key, PlayerbotSocialRelationshipValues const& values);
 
     [[nodiscard]] PlayerbotSocialRelationshipValues Recall(PlayerbotSocialRelationshipKey const& key) const;
+
+    // Pairs whose familiarity is at or above the floor, up to the limit. The whisper starter pump
+    // reads this to find who a bot knows well enough to check in on.
+    [[nodiscard]] std::vector<PlayerbotSocialWarmRelationship> WarmRelationships(float minFamiliarity,
+                                                                                 std::size_t limit) const;
 
     [[nodiscard]] std::size_t TrackedRelationshipCount() const;
 
@@ -409,6 +421,12 @@ public:
                               PlayerbotSocialRelationshipValues const& values);
 
     [[nodiscard]] PlayerbotSocialRelationshipValues RecallRelationship(PlayerbotSocialRelationshipKey const& key) const;
+
+    // Warm pairs both of whose ends still participate; an opted-out end drops the pair from the
+    // answer exactly as it blocks a recall. The manager's own fail-closed consent check still runs
+    // before anything durable happens with an answer from here.
+    [[nodiscard]] std::vector<PlayerbotSocialWarmRelationship> WarmRelationships(float minFamiliarity,
+                                                                                 std::size_t limit) const;
 
     PlayerbotSocialMemoryRejection RememberMemory(PlayerbotSocialMemoryRecord const& record);
 

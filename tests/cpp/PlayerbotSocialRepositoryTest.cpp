@@ -639,6 +639,33 @@ TEST(PlayerbotSocialStateStoreTest, AnOptedOutCharacterIsNeitherWrittenNorRead)
     EXPECT_EQ(store.RecallMemories({BOT_ONE, SUBJECT}, PlayerbotSocialChannel::General).size(), 1u);
 }
 
+TEST(PlayerbotSocialStateStoreTest, WarmRelationshipsReturnsOnlyPairsAtOrAboveTheFamiliarityFloor)
+{
+    PlayerbotSocialStateStore store;
+
+    PlayerbotSocialRelationshipValues faint;
+    faint.familiarity = 0.001f;
+
+    EXPECT_TRUE(store.RememberRelationship({BOT_ONE, SUBJECT}, Warm()));
+    EXPECT_TRUE(store.RememberRelationship({BOT_TWO, SUBJECT}, faint));
+
+    std::vector<PlayerbotSocialWarmRelationship> const warm = store.WarmRelationships(0.01f, 10);
+
+    ASSERT_EQ(warm.size(), 1u);
+    EXPECT_EQ(warm[0].key.botGuidCounter, BOT_ONE);
+    EXPECT_EQ(warm[0].key.subjectGuidCounter, SUBJECT);
+    EXPECT_GT(warm[0].values.familiarity, 0.01f);
+
+    // An opted-out end drops the pair from the answer, exactly as it blocks a recall.
+    store.SetOptedOut(SUBJECT, true);
+    EXPECT_TRUE(store.WarmRelationships(0.01f, 10).empty());
+    store.SetOptedOut(SUBJECT, false);
+
+    // The limit bounds the walk's answer.
+    EXPECT_TRUE(store.RememberRelationship({BOT_ONE, BOT_TWO}, Warm()));
+    EXPECT_EQ(store.WarmRelationships(0.01f, 1).size(), 1u);
+}
+
 TEST(PlayerbotSocialStateStoreTest, ResetErasesTheCharacterFromEveryBotInBothDirectionsAndLeavesOthersIntact)
 {
     PlayerbotSocialStateStore store;

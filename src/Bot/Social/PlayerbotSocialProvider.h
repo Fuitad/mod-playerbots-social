@@ -326,7 +326,8 @@ enum class PlayerbotSocialDeliveryRejection : uint8
     DuplicateFunction,
     LockedRoleplayContent,       // An authorized performance named progression-locked content.
     AuthorizedRoleplayInCombat,  // The authorized speaker is fighting; roleplay yields immediately.
-    LockedProgressionContent     // Ordinary output named progression-locked content.
+    LockedProgressionContent,    // Ordinary output named progression-locked content.
+    BudgetExhausted              // The server-wide hourly provider budget is spent; try next window.
 };
 
 [[nodiscard]] char const* PlayerbotSocialDeliveryRejectionName(PlayerbotSocialDeliveryRejection rejection);

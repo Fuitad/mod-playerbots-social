@@ -8,6 +8,7 @@
 #define PLAYERBOTS_PLAYERBOTSOCIALPOLICY_H
 
 #include <cstddef>
+#include <deque>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -242,6 +243,14 @@ struct PlayerbotSocialOpportunity
     uint64 nowUnixSeconds = 0;
     bool duplicateOfRecentMessage = false;
     uint32 consecutiveBotOnlyTurns = 0;
+
+    // The turn cap rides on the opportunity so the autonomous stage can raise it per activation
+    // while every earlier stage keeps the default. Zero is treated as the default, not "no turns".
+    uint32 maxConsecutiveBotOnlyTurns = PLAYERBOT_SOCIAL_MAX_CONSECUTIVE_BOT_TURNS;
+
+    // True only for the relationship-driven whisper check-in, the one whisper a bot may open. Every
+    // other whisper starter stays refused, keeping the channel reactive by default.
+    bool relationshipDriven = false;
     PlayerbotSocialProfileLoadState profileLoadState = PlayerbotSocialProfileLoadState::Pending;
 };
 
@@ -271,9 +280,21 @@ inline constexpr float PLAYERBOT_SOCIAL_STARTER_PRESSURE_BASE = 0.18f;
 
 // Geometric decay per consecutive bot only turn and per full idle interval. Geometric rather than
 // linear so the value falls steeply at first and then approaches zero without ever arriving.
+// Applies to the REPLY lane only: replies answer a live thread, so a stale or bot-saturated thread
+// deserves less of them. Starters follow the ambient fill below instead.
 inline constexpr float PLAYERBOT_SOCIAL_BOT_ONLY_TURN_DECAY = 0.62f;
 inline constexpr float PLAYERBOT_SOCIAL_IDLE_DECAY_PER_INTERVAL = 0.55f;
 inline constexpr uint64 PLAYERBOT_SOCIAL_IDLE_DECAY_INTERVAL_SECONDS = 60;
+
+/*
+ * Ambient cadence. A quiet scope FILLS toward a starter instead of decaying into permanent silence:
+ * starter pressure scales with idle time as idle/cadence, from the floor just after a line to the
+ * full pressure at or past the cadence point. The default is the fallback when the configured
+ * option is absent or unusable, exactly like the density multipliers above.
+ */
+inline constexpr uint32 PLAYERBOT_SOCIAL_AMBIENT_CADENCE_DEFAULT_SECONDS = 300;
+inline constexpr float PLAYERBOT_SOCIAL_AMBIENT_MIN_FILL = 0.05f;
+inline constexpr float PLAYERBOT_SOCIAL_STARTER_FULL_PRESSURE = 0.85f;
 
 // How much each relevant human message adds, and the most that participation alone can contribute.
 // Bounded so a long human conversation approaches the ceiling instead of saturating at it.
@@ -305,6 +326,33 @@ struct PlayerbotSocialDensityMultipliers
                                                      PlayerbotSocialDensityMultipliers const& multipliers);
 
 /*
+ * The server-wide provider call budget. One sliding hour, one ceiling: while the window holds
+ * `hourlyBudget` admitted calls, further calls are refused, and demand reaching twice the budget
+ * inside the window is ruled a runaway loop rather than a busy hour and trips the budget circuit.
+ * Pure state plus a pure decision, so the whole ladder is testable without a database.
+ */
+inline constexpr uint64 PLAYERBOT_SOCIAL_PROVIDER_BUDGET_WINDOW_SECONDS = 3600;
+
+struct PlayerbotSocialProviderBudgetState
+{
+    std::deque<uint64> admittedAtUnixSeconds;
+    std::deque<uint64> refusedAtUnixSeconds;
+};
+
+enum class PlayerbotSocialBudgetDecision : uint8
+{
+    Admitted = 0,
+    Refused,
+
+    // Refused, and the refusal rate says the backstop must open: the caller owns flipping the
+    // durable circuit, this decision only names the moment.
+    RefusedCircuitTrip
+};
+
+[[nodiscard]] PlayerbotSocialBudgetDecision PlayerbotSocialGovernProviderCall(
+    PlayerbotSocialProviderBudgetState& state, uint64 nowUnixSeconds, uint32 hourlyBudget);
+
+/*
  * The state of one inferred thread, as values. Counters rather than history: the coordinator keeps
  * bounded identities and participant state, and nothing here can outlive the character it describes.
  */
@@ -315,22 +363,33 @@ struct PlayerbotSocialThreadPressure
     uint64 lastActivityUnixSeconds = 0;
     uint64 nowUnixSeconds = 0;
     uint8 channelDensity = 0;  // 0..100, clamped on use
+
+    // Per-turn decay applied to the reply lane. The autonomous stage softens it so a bot-only
+    // thread survives to a real length; earlier stages keep the default. Out-of-range values are
+    // clamped back to the default on use.
+    float botOnlyTurnDecay = PLAYERBOT_SOCIAL_BOT_ONLY_TURN_DECAY;
 };
 
 // Probability that an eligible bot should answer in this thread right now. Strictly inside (0, 1).
 [[nodiscard]] float PlayerbotSocialReplyPressure(PlayerbotSocialThreadPressure const& thread,
                                                  float densityProfileMultiplier = 1.0f);
 
-// Probability that a bot should start speaking here. Always below the reply pressure for the same
-// thread, and it falls faster as the channel fills up.
-[[nodiscard]] float PlayerbotSocialStarterPressure(PlayerbotSocialThreadPressure const& thread,
-                                                   float densityProfileMultiplier = 1.0f);
+/*
+ * Probability that a bot should start speaking here. Below the reply pressure in a freshly active
+ * thread, and it falls faster as the channel fills up; in a scope that has stayed quiet it FILLS
+ * toward the full starter pressure at the configured cadence, so silence invites the next line
+ * rather than suppressing it.
+ */
+[[nodiscard]] float PlayerbotSocialStarterPressure(
+    PlayerbotSocialThreadPressure const& thread, float densityProfileMultiplier = 1.0f,
+    uint32 ambientCadenceSeconds = PLAYERBOT_SOCIAL_AMBIENT_CADENCE_DEFAULT_SECONDS);
 
 // General uses a separately configured multiplier. Say and Party retain the ordinary starter curve.
 // Invalid General multipliers fail to the established quiet density multiplier.
 [[nodiscard]] float PlayerbotSocialStarterPressureForChannel(
     PlayerbotSocialChannel channel, PlayerbotSocialThreadPressure const& thread, float densityProfileMultiplier = 1.0f,
-    float generalMultiplier = PlayerbotSocialDensityMultipliers{}.quiet);
+    float generalMultiplier = PlayerbotSocialDensityMultipliers{}.quiet,
+    uint32 ambientCadenceSeconds = PLAYERBOT_SOCIAL_AMBIENT_CADENCE_DEFAULT_SECONDS);
 
 /*
  * Which budget lane this opportunity competes in. Derived from thread state rather than stored, so

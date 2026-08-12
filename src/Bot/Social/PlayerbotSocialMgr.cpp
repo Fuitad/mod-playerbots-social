@@ -227,6 +227,7 @@ uint64 HashRecentLine(std::string_view text)
 constexpr uint64 ACTOR_ID_NAMESPACE = 0x4143544F52494400ULL;
 constexpr uint64 RELATIONSHIP_ID_NAMESPACE = 0x52454C4154494F00ULL;
 constexpr uint64 MEMORY_ID_NAMESPACE = 0x4D454D4F52594900ULL;
+constexpr uint64 MODERATION_ID_NAMESPACE = 0x4D4F444341534500ULL;
 
 /*
  * Actor and relationship identities are derived from what they name rather than from a counter,
@@ -246,6 +247,15 @@ std::string MakeRelationshipPublicId(PlayerbotSocialRelationshipKey const& key)
     uint64 const high = PlayerbotPersonality::SplitMix64(key.botGuidCounter ^ RELATIONSHIP_ID_NAMESPACE);
     uint64 const low = PlayerbotPersonality::SplitMix64(high ^ key.subjectGuidCounter);
     return RenderPublicId(PlayerbotSocialIdKind::Relationship, high, low);
+}
+
+// Derived from (subject, category) like a relationship id is from its pair, so a repeated campaign
+// collides with its own open case on public_id and bumps it instead of filing a duplicate.
+std::string MakeModerationCasePublicId(uint64 subjectGuidCounter, PlayerbotSocialModerationCategory category)
+{
+    uint64 const high = PlayerbotPersonality::SplitMix64(subjectGuidCounter ^ MODERATION_ID_NAMESPACE);
+    uint64 const low = PlayerbotPersonality::SplitMix64(high ^ (static_cast<uint64>(static_cast<uint8>(category)) + 1));
+    return RenderPublicId(PlayerbotSocialIdKind::ModerationCase, high, low);
 }
 
 // A memory, unlike a relationship, is not unique per pair: a bot can hold many about the same
@@ -385,6 +395,38 @@ PlayerbotSocialThreadHandle PlayerbotSocialMgr::Observe(PlayerbotSocialObservati
     else
     {
         ++chosen->consecutiveBotOnlyTurns;
+    }
+
+    /*
+     * An exchanged pair of turns warms the pair a little. The credits are shaped by a pure function
+     * and applied through ApplyRelationshipDelta, so consent, the per-pair window ceiling, and the
+     * reset queue all rule here exactly as they do for assistance. This is what lets a society of
+     * bots grow relationships out of nothing but talking, with no human in the loop.
+     */
+    if (chosen->lastSpeakerGuidCounter != 0 && chosen->lastSpeakerGuidCounter != observation.speakerGuidCounter)
+    {
+        for (PlayerbotSocialConversationCredit const& credit :
+             PlayerbotSocialConversationCredits(observation.speakerGuidCounter, observation.speakerIsHuman,
+                                                chosen->lastSpeakerGuidCounter, chosen->lastSpeakerWasHuman))
+            ApplyRelationshipDelta(credit.botGuidCounter, credit.subjectGuidCounter, credit.delta,
+                                   observation.atUnixSeconds);
+
+        /*
+         * The same adjacency answers "who was that aimed at": a hostile line in a thread targets
+         * the previous speaker. Only a bot can be the abused subject here; what humans say to each
+         * other is theirs, and what bots feel is the thing the moderation cases exist to notice.
+         */
+        if (!chosen->lastSpeakerWasHuman && !observation.text.empty())
+            if (std::optional<PlayerbotSocialModerationCategory> const category =
+                    PlayerbotSocialClassifyHostileLine(observation.text))
+                NoteHostileLine(chosen->lastSpeakerGuidCounter, observation.speakerGuidCounter, *category,
+                                observation.text, observation.atUnixSeconds);
+    }
+
+    if (observation.speakerGuidCounter != 0)
+    {
+        chosen->lastSpeakerGuidCounter = observation.speakerGuidCounter;
+        chosen->lastSpeakerWasHuman = observation.speakerIsHuman;
     }
 
     /*
@@ -951,6 +993,10 @@ char const* PlayerbotSocialStarterSourceKindName(PlayerbotSocialStarterSourceKin
             return "kill";
         case PlayerbotSocialStarterSourceKind::Level:
             return "level";
+        case PlayerbotSocialStarterSourceKind::ZoneArrival:
+            return "zone_arrival";
+        case PlayerbotSocialStarterSourceKind::Death:
+            return "death";
     }
 
     return "unknown";
@@ -1000,6 +1046,8 @@ bool PlayerbotSocialStarterSourceIsValid(PlayerbotSocialStarterSource const& sou
         case PlayerbotSocialStarterSourceKind::Loot:
         case PlayerbotSocialStarterSourceKind::Kill:
         case PlayerbotSocialStarterSourceKind::Level:
+        case PlayerbotSocialStarterSourceKind::ZoneArrival:
+        case PlayerbotSocialStarterSourceKind::Death:
             if (source.questTransition != PlayerbotSocialQuestTransition::None)
                 return false;
             break;
@@ -1017,19 +1065,84 @@ bool PlayerbotSocialStarterSourceIsValid(PlayerbotSocialStarterSource const& sou
            source.subject.size() <= PLAYERBOT_SOCIAL_STARTER_SUBJECT_MAX_LENGTH;
 }
 
-bool PlayerbotSocialSelectStarterChannel(PlayerbotSocialStarterAudience const& audience,
-                                         PlayerbotSocialChannel& channel)
+std::vector<PlayerbotSocialConversationCredit> PlayerbotSocialConversationCredits(uint64 speakerGuidCounter,
+                                                                                  bool speakerIsHuman,
+                                                                                  uint64 previousSpeakerGuidCounter,
+                                                                                  bool previousSpeakerWasHuman)
 {
+    std::vector<PlayerbotSocialConversationCredit> credits;
+
+    if (speakerGuidCounter == 0 || previousSpeakerGuidCounter == 0 ||
+        speakerGuidCounter == previousSpeakerGuidCounter)
+        return credits;
+
+    PlayerbotSocialRelationshipValues delta;
+    delta.familiarity = PLAYERBOT_SOCIAL_CONVERSATION_FAMILIARITY_DELTA;
+    delta.affinity = PLAYERBOT_SOCIAL_CONVERSATION_AFFINITY_DELTA;
+    delta.trust = 0.0f;
+
+    // The speaker's view of who they answered, then the answered party's view of the speaker. Only
+    // bot owners: a ledger is never kept on a person's behalf.
+    if (!speakerIsHuman)
+        credits.push_back({speakerGuidCounter, previousSpeakerGuidCounter, delta});
+
+    if (!previousSpeakerWasHuman)
+        credits.push_back({previousSpeakerGuidCounter, speakerGuidCounter, delta});
+
+    return credits;
+}
+
+bool PlayerbotSocialSelectStarterChannel(PlayerbotSocialStarterAudience const& audience,
+                                         PlayerbotSocialChannel& channel, bool allowBotAudiences)
+{
+    // A real human anywhere outranks every bot audience: a person who can perceive the line is
+    // always the preferred reason to speak, whatever stage admitted the starter.
     if (audience.hasRealPartyMember)
         channel = PlayerbotSocialChannel::Party;
     else if (audience.hasRealSayListener)
         channel = PlayerbotSocialChannel::Say;
     else if (audience.hasRealGeneralMember)
         channel = PlayerbotSocialChannel::General;
+    else if (allowBotAudiences && audience.hasBotPartyMember)
+        channel = PlayerbotSocialChannel::Party;
+    else if (allowBotAudiences && audience.hasBotSayListener)
+        channel = PlayerbotSocialChannel::Say;
+    else if (allowBotAudiences && audience.hasBotGeneralMember)
+        channel = PlayerbotSocialChannel::General;
     else
         return false;
 
     return true;
+}
+
+std::size_t PlayerbotSocialPickStarterContext(
+    std::vector<PlayerbotSocialStarterContext> const& starters,
+    std::array<uint64, PLAYERBOT_SOCIAL_STARTER_SOURCE_KIND_COUNT> const& lastSpokenAtByKind)
+{
+    std::size_t chosen = 0;
+
+    for (std::size_t index = 1; index < starters.size(); ++index)
+    {
+        std::size_t const candidateKind = static_cast<std::size_t>(starters[index].source.kind);
+        std::size_t const chosenKind = static_cast<std::size_t>(starters[chosen].source.kind);
+
+        // An out-of-range kind cannot index the rotation and never displaces a valid choice.
+        if (candidateKind >= PLAYERBOT_SOCIAL_STARTER_SOURCE_KIND_COUNT)
+            continue;
+        if (chosenKind >= PLAYERBOT_SOCIAL_STARTER_SOURCE_KIND_COUNT)
+        {
+            chosen = index;
+            continue;
+        }
+
+        if (lastSpokenAtByKind[candidateKind] < lastSpokenAtByKind[chosenKind])
+            chosen = index;
+        else if (lastSpokenAtByKind[candidateKind] == lastSpokenAtByKind[chosenKind] &&
+                 starters[index].atUnixSeconds >= starters[chosen].atUnixSeconds)
+            chosen = index;
+    }
+
+    return chosen;
 }
 
 bool PlayerbotSocialMgr::NoteStarterContext(PlayerbotSocialStarterContext const& starter)
@@ -3222,6 +3335,14 @@ void PlayerbotSocialMgr::LoadRuntimeControl()
         _runtimeControl.channelEnabled[slot] = fields[2 + index].Get<bool>();
     }
 
+    // The backstop survives a restart on purpose: a circuit the governor opened stays open until an
+    // operator closes the row, and rebooting the server is not an operator closing the row.
+    _runtimeControl.budgetCircuitOpen = fields[2 + PLAYERBOT_SOCIAL_CHANNEL_COUNT].Get<bool>();
+    if (_runtimeControl.budgetCircuitOpen)
+        LOG_WARN("playerbots", "Social budget circuit is OPEN (reason={}); the feature stays silent until "
+                 "an operator closes it.",
+                 fields[3 + PLAYERBOT_SOCIAL_CHANNEL_COUNT].Get<std::string>());
+
     LOG_INFO("playerbots",
              "Social runtime controls loaded: paused={}, density={}, general={}, say={}, party={}, whisper={}.",
              _runtimeControl.paused, PlayerbotSocialDensityProfileName(_runtimeControl.density),
@@ -3685,6 +3806,150 @@ PlayerbotSocialEncounterSweepResult PlayerbotSocialMgr::CompleteStaleEncounters(
     return result;
 }
 
+bool PlayerbotSocialMgr::AdmitProviderCall(uint64 nowUnixSeconds)
+{
+    switch (PlayerbotSocialGovernProviderCall(_providerBudget, nowUnixSeconds,
+                                              sPlayerbotSocialConfig.socialChatProviderHourlyBudget))
+    {
+        case PlayerbotSocialBudgetDecision::Admitted:
+            return true;
+        case PlayerbotSocialBudgetDecision::Refused:
+            return false;
+        case PlayerbotSocialBudgetDecision::RefusedCircuitTrip:
+            OpenBudgetCircuit("sustained_overrun", nowUnixSeconds);
+            return false;
+    }
+
+    return false;
+}
+
+void PlayerbotSocialMgr::OpenBudgetCircuit(std::string_view reason, uint64 nowUnixSeconds)
+{
+    if (_runtimeControl.budgetCircuitOpen)
+        return;
+
+    _runtimeControl.budgetCircuitOpen = true;
+
+    LOG_WARN("playerbots",
+             "Social budget circuit OPENED (reason={}): provider demand overran the configured hourly budget of "
+             "{}. The feature is silent until an operator clears budget_circuit_open in "
+             "playerbot_social_runtime_control.",
+             reason, sPlayerbotSocialConfig.socialChatProviderHourlyBudget);
+
+    PlayerbotSocialPreparedStatement* statement = NewPlayerbotSocialStatement(PLAYERBOT_SOCIAL_STMT_UPD_BUDGET_CIRCUIT);
+    uint8 index = 0;
+    statement->SetData(index++, _runtimeControl.paused);
+    statement->SetData(index++, std::string(PlayerbotSocialDensityProfileName(_runtimeControl.density)));
+    for (PlayerbotSocialChannel const channel : RUNTIME_CONTROL_CHANNEL_ORDER)
+        statement->SetData(index++, _runtimeControl.channelEnabled[static_cast<std::size_t>(channel)]);
+    statement->SetData(index++, true);
+    statement->SetData(index++, std::string(reason));
+    statement->SetData(index++, nowUnixSeconds);
+    PlayerbotSocialExecute(statement);
+
+    PlayerbotSocialEventDraft draft;
+    draft.eventType = "social.budget";
+    draft.origin = PlayerbotSocialEventOrigin::System;
+    draft.outcome = PlayerbotSocialEventOutcome::Failed;
+    draft.reason = std::string(reason);
+    draft.occurredAtUnixSeconds = nowUnixSeconds;
+    draft.priority = PlayerbotSocialEventPriority::Critical;
+    RecordEvent(std::move(draft));
+}
+
+void PlayerbotSocialMgr::NoteHostileLine(uint64 subjectGuidCounter, uint64 speakerGuidCounter,
+                                         PlayerbotSocialModerationCategory category, std::string const& text,
+                                         uint64 nowUnixSeconds)
+{
+    if (subjectGuidCounter == 0)
+        return;
+
+    auto const key = std::pair{subjectGuidCounter, category};
+
+    // Evicting, like the whisper stamps: a lost tally costs a campaign a fresh count, never a
+    // durable record that already exists.
+    if (_moderationTallies.find(key) == _moderationTallies.end() &&
+        _moderationTallies.size() >= PLAYERBOT_SOCIAL_MAX_TRACKED_PAIRS)
+    {
+        auto oldest = _moderationTallies.begin();
+        for (auto it = _moderationTallies.begin(); it != _moderationTallies.end(); ++it)
+            if (it->second.lastAtUnixSeconds < oldest->second.lastAtUnixSeconds)
+                oldest = it;
+        _moderationTallies.erase(oldest);
+    }
+
+    PlayerbotSocialModerationTally& tally = _moderationTallies[key];
+    if (!PlayerbotSocialNoteHostileOccurrence(tally, category, nowUnixSeconds))
+        return;
+
+    // Durable only once the subject resolves to an actor row; a tally for a not-yet-registered
+    // character keeps counting in memory and lands on the first occurrence after registration.
+    auto const subject = _actorIds.find(subjectGuidCounter);
+    if (subject == _actorIds.end())
+        return;
+
+    std::string evidence = "{\"last_line\":";
+    AppendJsonString(evidence, text.size() > 120 ? text.substr(0, 120) : text);
+    if (auto const speaker = _actorIds.find(speakerGuidCounter); speaker != _actorIds.end())
+        evidence += ",\"speaker_actor_id\":" + std::to_string(speaker->second);
+    evidence += ",\"window_occurrences\":" + std::to_string(tally.occurrences);
+    evidence += '}';
+
+    PlayerbotSocialPreparedStatement* statement = NewPlayerbotSocialStatement(PLAYERBOT_SOCIAL_STMT_INS_MODERATION_CASE);
+    statement->SetData(0, MakeModerationCasePublicId(subjectGuidCounter, category));
+    statement->SetData(1, subject->second);
+    statement->SetData(2, std::string(PlayerbotSocialModerationCategoryName(category)));
+    statement->SetData(3, static_cast<uint32>(1));
+    statement->SetData(4, tally.firstAtUnixSeconds);
+    statement->SetData(5, nowUnixSeconds);
+    statement->SetData(6, evidence);
+    PlayerbotSocialExecute(statement);
+
+    LOG_WARN("playerbots", "Social moderation case opened or bumped: subject bot {} category {} occurrences {}.",
+             subjectGuidCounter, PlayerbotSocialModerationCategoryName(category), tally.occurrences);
+
+    PlayerbotSocialEventDraft draft;
+    draft.eventType = "social.moderation";
+    draft.origin = PlayerbotSocialEventOrigin::System;
+    draft.outcome = PlayerbotSocialEventOutcome::Recorded;
+    draft.reason = PlayerbotSocialModerationCategoryName(category);
+    draft.botGuidCounter = subjectGuidCounter;
+    draft.actorGuidCounter = speakerGuidCounter;
+    draft.occurredAtUnixSeconds = nowUnixSeconds;
+    draft.priority = PlayerbotSocialEventPriority::Critical;
+    RecordEvent(std::move(draft));
+}
+
+bool PlayerbotSocialMgr::NoteWhisperStarterAttempt(PlayerbotSocialRelationshipKey const& key, uint64 nowUnixSeconds,
+                                                   uint64 cooldownSeconds)
+{
+    if (key.botGuidCounter == 0 || key.subjectGuidCounter == 0)
+        return false;
+
+    auto const stamped = _whisperStarterAttempts.find(key);
+    if (stamped != _whisperStarterAttempts.end() &&
+        ElapsedSeconds(nowUnixSeconds, stamped->second) < cooldownSeconds)
+        return false;
+
+    /*
+     * Evicts, unlike the assistance ledger, because a stamp here is not a bound anyone could farm:
+     * losing one permits at most a single early whisper for that pair. The oldest stamp is the one
+     * most likely to have expired anyway.
+     */
+    if (stamped == _whisperStarterAttempts.end() &&
+        _whisperStarterAttempts.size() >= PLAYERBOT_SOCIAL_MAX_TRACKED_PAIRS)
+    {
+        auto oldest = _whisperStarterAttempts.begin();
+        for (auto it = _whisperStarterAttempts.begin(); it != _whisperStarterAttempts.end(); ++it)
+            if (it->second < oldest->second)
+                oldest = it;
+        _whisperStarterAttempts.erase(oldest);
+    }
+
+    _whisperStarterAttempts[key] = nowUnixSeconds;
+    return true;
+}
+
 PlayerbotSocialRelationshipValues PlayerbotSocialMgr::ApplyRelationshipDelta(
     uint64 botGuidCounter, uint64 subjectGuidCounter, PlayerbotSocialRelationshipValues const& delta,
     uint64 nowUnixSeconds)
@@ -3991,6 +4256,14 @@ PlayerbotSocialActivationResult PlayerbotSocialMgr::Activate(PlayerbotSocialActi
      */
     PlayerbotSocialSelectionInput selection;
 
+    /*
+     * The autonomous society stage paces bot-only threads through configuration; every earlier
+     * stage keeps the built-in cap and decay, so enabling the stage is the only way to change how
+     * long bots talk among themselves.
+     */
+    bool const autonomousStage =
+        PlayerbotSocialEffectiveGate().stage == PlayerbotSocialRolloutStage::AutonomousSociety;
+
     for (PlayerbotSocialActivationCandidate const& candidate : activation.candidates)
     {
         if (activation.starter && (activation.starterSourceBotGuidCounter == 0 ||
@@ -4022,6 +4295,9 @@ PlayerbotSocialActivationResult PlayerbotSocialMgr::Activate(PlayerbotSocialActi
         opportunity.nowUnixSeconds = activation.nowUnixSeconds;
         opportunity.duplicateOfRecentMessage = activation.duplicateOfRecentMessage;
         opportunity.consecutiveBotOnlyTurns = activation.consecutiveBotOnlyTurns;
+        if (autonomousStage)
+            opportunity.maxConsecutiveBotOnlyTurns = sPlayerbotSocialConfig.socialChatAutonomousMaxConsecutiveBotTurns;
+        opportunity.relationshipDriven = activation.relationshipDriven;
         opportunity.profileLoadState = candidate.profileLoadState;
 
         PlayerbotSocialOpportunityRejection const refusal = PlayerbotSocialEvaluateOpportunity(opportunity);
@@ -4063,6 +4339,8 @@ PlayerbotSocialActivationResult PlayerbotSocialMgr::Activate(PlayerbotSocialActi
     pressure.lastActivityUnixSeconds = activation.threadLastActivityUnixSeconds;
     pressure.nowUnixSeconds = activation.nowUnixSeconds;
     pressure.channelDensity = activation.channelDensity;
+    if (autonomousStage)
+        pressure.botOnlyTurnDecay = sPlayerbotSocialConfig.socialChatAutonomousBotTurnDecay;
 
     PlayerbotSocialDensityMultipliers multipliers;
     multipliers.quiet = sPlayerbotSocialConfig.socialChatDensityMultiplierQuiet;
@@ -4079,7 +4357,8 @@ PlayerbotSocialActivationResult PlayerbotSocialMgr::Activate(PlayerbotSocialActi
      */
     result.pressure = activation.starter ? PlayerbotSocialStarterPressureForChannel(
                                                activation.channel, pressure, densityMultiplier,
-                                               sPlayerbotSocialConfig.socialChatGeneralStarterPressureMultiplier)
+                                               sPlayerbotSocialConfig.socialChatGeneralStarterPressureMultiplier,
+                                               sPlayerbotSocialConfig.socialChatAmbientCadenceSeconds)
                                          : PlayerbotSocialReplyPressure(pressure, densityMultiplier);
 
     selection.replyPressure = result.pressure;
@@ -4105,9 +4384,13 @@ PlayerbotSocialActivationResult PlayerbotSocialMgr::Activate(PlayerbotSocialActi
     /*
      * A whisper is answered to the character who sent it; every other surface is addressed to a room.
      * Carrying the speaker on a General line would make a room remark look like a private reply in
-     * every downstream consumer.
+     * every downstream consumer. A whisper STARTER has no speaker: its addressee is the audience the
+     * relationship check-in was opened for.
      */
-    uint64 const target = activation.channel == PlayerbotSocialChannel::Whisper ? activation.speakerGuidCounter : 0;
+    uint64 const target = activation.channel == PlayerbotSocialChannel::Whisper
+                              ? (activation.starter ? activation.starterAudienceGuidCounter
+                                                    : activation.speakerGuidCounter)
+                              : 0;
 
     for (uint64 const responder : result.selection.responders)
     {
@@ -4833,6 +5116,17 @@ uint64 PlayerbotSocialMgr::BeginSocialRequest(
     if (!PlayerbotSocialPublicIdIsValid(PlayerbotSocialIdKind::Thread, threadPublicId))
     {
         rejection = PlayerbotSocialDeliveryRejection::MalformedThreadIdentity;
+        return 0;
+    }
+
+    /*
+     * The server-wide budget rules before anything is reserved or recorded, so a refused request
+     * costs nothing downstream. Every generation the sidecar would run passes through here, which
+     * is what makes the ceiling an actual ceiling on sidecar load.
+     */
+    if (!AdmitProviderCall(nowUnixSeconds))
+    {
+        rejection = PlayerbotSocialDeliveryRejection::BudgetExhausted;
         return 0;
     }
 

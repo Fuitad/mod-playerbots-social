@@ -150,6 +150,9 @@ TEST(PlayerbotSocialRolloutStageTest, MissingAndInvalidConfigurationResolveToHum
     EXPECT_EQ(PlayerbotSocialParseRolloutStage("grounded_starters"), PlayerbotSocialRolloutStage::HumanReplies);
     EXPECT_EQ(PlayerbotSocialParseRolloutStage("bounded_continuation"),
               PlayerbotSocialRolloutStage::BoundedContinuation);
+    EXPECT_EQ(PlayerbotSocialParseRolloutStage("autonomous_society"), PlayerbotSocialRolloutStage::AutonomousSociety);
+    EXPECT_STREQ(PlayerbotSocialRolloutStageName(PlayerbotSocialRolloutStage::AutonomousSociety),
+                 "autonomous_society");
 }
 
 TEST(PlayerbotSocialRolloutStageTest, LaterBehaviorCannotLeakIntoAnEarlierStage)
@@ -1373,6 +1376,53 @@ TEST(PlayerbotSocialStarterSourceTest, EveryQuestTransitionKeepsItsExactGroundin
         "loot: a rare drop");
 }
 
+TEST(PlayerbotSocialStarterSourceTest, TheAmbientKindsGroundAndValidateLikeTheOriginalFour)
+{
+    PlayerbotSocialStarterSource arrival = StarterSource(PlayerbotSocialStarterSourceKind::ZoneArrival, "Westfall");
+    EXPECT_TRUE(PlayerbotSocialStarterSourceIsValid(arrival));
+    EXPECT_EQ(PlayerbotSocialStarterGroundingSubject(arrival), "zone_arrival: Westfall");
+
+    PlayerbotSocialStarterSource death = StarterSource(PlayerbotSocialStarterSourceKind::Death, "Westfall");
+    EXPECT_TRUE(PlayerbotSocialStarterSourceIsValid(death));
+    EXPECT_EQ(PlayerbotSocialStarterGroundingSubject(death), "death: Westfall");
+
+    // A quest transition riding on an ambient kind is a corrupted source, exactly as it is for loot.
+    arrival.questTransition = PlayerbotSocialQuestTransition::Accepted;
+    EXPECT_FALSE(PlayerbotSocialStarterSourceIsValid(arrival));
+}
+
+TEST(PlayerbotSocialStarterSourceTest, ThePickerRotatesAcrossKindsInsteadOfChasingTheFreshest)
+{
+    /*
+     * Kill and loot events vastly outnumber everything else, so "speak about the freshest thing"
+     * converges on every line being a grind report. The picker prefers the kind spoken longest ago,
+     * and only inside that kind does freshness win.
+     */
+    auto const context = [](PlayerbotSocialStarterSourceKind kind, uint64 at)
+    {
+        PlayerbotSocialStarterContext starter;
+        starter.source.kind = kind;
+        starter.atUnixSeconds = at;
+        return starter;
+    };
+
+    std::vector<PlayerbotSocialStarterContext> const starters = {
+        context(PlayerbotSocialStarterSourceKind::Kill, 100),
+        context(PlayerbotSocialStarterSourceKind::ZoneArrival, 90),
+        context(PlayerbotSocialStarterSourceKind::Kill, 120),
+    };
+
+    std::array<uint64, PLAYERBOT_SOCIAL_STARTER_SOURCE_KIND_COUNT> lastSpokenAtByKind{};
+    lastSpokenAtByKind[static_cast<std::size_t>(PlayerbotSocialStarterSourceKind::Kill)] = 200;
+
+    // Kills were just spoken about; the arrival has never been. The stale-but-unspoken kind wins.
+    EXPECT_EQ(PlayerbotSocialPickStarterContext(starters, lastSpokenAtByKind), 1u);
+
+    // With no kind favoured, the freshest context wins, exactly as before.
+    std::array<uint64, PLAYERBOT_SOCIAL_STARTER_SOURCE_KIND_COUNT> untouched{};
+    EXPECT_EQ(PlayerbotSocialPickStarterContext(starters, untouched), 2u);
+}
+
 TEST(PlayerbotSocialStarterSourceTest, ACurrentRealAudienceSelectsOnlySupportedStarterChannels)
 {
     PlayerbotSocialChannel channel = PlayerbotSocialChannel::Whisper;
@@ -1393,6 +1443,36 @@ TEST(PlayerbotSocialStarterSourceTest, ACurrentRealAudienceSelectsOnlySupportedS
     EXPECT_EQ(channel, PlayerbotSocialChannel::General);
 
     EXPECT_FALSE(PlayerbotSocialSelectStarterChannel(PlayerbotSocialStarterAudience(), channel));
+}
+
+TEST(PlayerbotSocialStarterSourceTest, ABotOnlyAudienceSelectsAChannelOnlyWhenBotAudiencesAreAllowed)
+{
+    PlayerbotSocialChannel channel = PlayerbotSocialChannel::Whisper;
+
+    // The autonomous society contract: a bot audience carries a starter, but only when the caller
+    // explicitly allows it, so every earlier stage keeps requiring a real human unchanged.
+    PlayerbotSocialStarterAudience botsOnly;
+    botsOnly.hasBotSayListener = true;
+    EXPECT_FALSE(PlayerbotSocialSelectStarterChannel(botsOnly, channel));
+    EXPECT_TRUE(PlayerbotSocialSelectStarterChannel(botsOnly, channel, /*allowBotAudiences=*/true));
+    EXPECT_EQ(channel, PlayerbotSocialChannel::Say);
+
+    PlayerbotSocialStarterAudience botParty;
+    botParty.hasBotPartyMember = true;
+    EXPECT_TRUE(PlayerbotSocialSelectStarterChannel(botParty, channel, /*allowBotAudiences=*/true));
+    EXPECT_EQ(channel, PlayerbotSocialChannel::Party);
+
+    PlayerbotSocialStarterAudience botGeneral;
+    botGeneral.hasBotGeneralMember = true;
+    EXPECT_TRUE(PlayerbotSocialSelectStarterChannel(botGeneral, channel, /*allowBotAudiences=*/true));
+    EXPECT_EQ(channel, PlayerbotSocialChannel::General);
+
+    // A real human anywhere outranks every bot audience: perceivability by a person stays first.
+    PlayerbotSocialStarterAudience mixed;
+    mixed.hasBotPartyMember = true;
+    mixed.hasRealGeneralMember = true;
+    EXPECT_TRUE(PlayerbotSocialSelectStarterChannel(mixed, channel, /*allowBotAudiences=*/true));
+    EXPECT_EQ(channel, PlayerbotSocialChannel::General);
 }
 
 TEST(PlayerbotSocialStarterSourceTest, OnlyPerceivableStarterAudienceMayEnterGrounding)

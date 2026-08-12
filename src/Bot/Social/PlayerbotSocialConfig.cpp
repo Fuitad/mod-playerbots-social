@@ -16,6 +16,20 @@ PlayerbotSocialConfigValues NormalizePlayerbotSocialConfig(PlayerbotSocialConfig
     values.socialChatDensityMultiplierLively = normalizeMultiplier(values.socialChatDensityMultiplierLively, 1.6f);
     values.socialChatGeneralStarterPressureMultiplier =
         normalizeMultiplier(values.socialChatGeneralStarterPressureMultiplier, 0.55f);
+    // Zero is an absent or unusable cadence, not "immediately"; the policy layer applies the same
+    // fallback, so both agree on what an invalid value means.
+    if (values.socialChatAmbientCadenceSeconds == 0)
+        values.socialChatAmbientCadenceSeconds = 300;
+    if (values.socialChatAutonomousMaxConsecutiveBotTurns == 0)
+        values.socialChatAutonomousMaxConsecutiveBotTurns = 6;
+    if (!std::isfinite(values.socialChatAutonomousBotTurnDecay) || values.socialChatAutonomousBotTurnDecay <= 0.0f ||
+        values.socialChatAutonomousBotTurnDecay > 1.0f)
+        values.socialChatAutonomousBotTurnDecay = 0.85f;
+    if (!std::isfinite(values.socialChatWhisperMinFamiliarity) || values.socialChatWhisperMinFamiliarity <= 0.0f ||
+        values.socialChatWhisperMinFamiliarity > 1.0f)
+        values.socialChatWhisperMinFamiliarity = 0.01f;
+    if (values.socialChatWhisperPairCooldownSeconds == 0)
+        values.socialChatWhisperPairCooldownSeconds = 21600;
     if (values.socialChatTelemetryRetentionHours < 48)
         values.socialChatTelemetryRetentionHours = 48;
     return values;
@@ -35,6 +49,18 @@ void ReloadPlayerbotSocialConfig()
         sConfigMgr->GetOption<float>("PlayerbotsSocial.DensityMultiplier.Lively", 1.6f);
     values.socialChatGeneralStarterPressureMultiplier =
         sConfigMgr->GetOption<float>("PlayerbotsSocial.GeneralStarterPressureMultiplier", 0.55f);
+    values.socialChatAmbientCadenceSeconds =
+        sConfigMgr->GetOption<uint32>("PlayerbotsSocial.AmbientCadenceSeconds", 300);
+    values.socialChatAutonomousMaxConsecutiveBotTurns =
+        sConfigMgr->GetOption<uint32>("PlayerbotsSocial.Autonomous.MaxConsecutiveBotTurns", 6);
+    values.socialChatAutonomousBotTurnDecay =
+        sConfigMgr->GetOption<float>("PlayerbotsSocial.Autonomous.BotTurnDecay", 0.85f);
+    values.socialChatWhisperMinFamiliarity =
+        sConfigMgr->GetOption<float>("PlayerbotsSocial.Whisper.MinFamiliarity", 0.01f);
+    values.socialChatWhisperPairCooldownSeconds =
+        sConfigMgr->GetOption<uint32>("PlayerbotsSocial.Whisper.PairCooldownSeconds", 21600);
+    values.socialChatProviderHourlyBudget =
+        sConfigMgr->GetOption<uint32>("PlayerbotsSocial.Provider.HourlyBudget", 120);
     values.socialChatTelemetryRetentionHours =
         sConfigMgr->GetOption<uint32>("PlayerbotsSocial.TelemetryRetentionHours", 48);
     values.socialChatControlToken = sConfigMgr->GetOption<std::string>("PlayerbotsSocial.ControlToken", "");

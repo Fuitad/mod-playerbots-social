@@ -82,14 +82,40 @@ float HumanParticipationBonus(uint32 relevantHumanMessages)
     return raw > PLAYERBOT_SOCIAL_HUMAN_BONUS_MAX ? PLAYERBOT_SOCIAL_HUMAN_BONUS_MAX : raw;
 }
 
-// The decay shared by both lanes: bot only turns and idle time.
+// The reply lane's decay: bot only turns and idle time. Starters use AmbientFill below instead.
 float ThreadDecay(PlayerbotSocialThreadPressure const& thread)
 {
     uint64 const idleSeconds = ElapsedSeconds(thread.nowUnixSeconds, thread.lastActivityUnixSeconds);
     uint64 const idleIntervals = idleSeconds / PLAYERBOT_SOCIAL_IDLE_DECAY_INTERVAL_SECONDS;
 
-    return DecayFactor(PLAYERBOT_SOCIAL_BOT_ONLY_TURN_DECAY, thread.consecutiveBotOnlyTurns) *
+    // The per-turn decay rides on the thread state so the autonomous stage can soften it. Anything
+    // outside (0, 1] is an unusable carrier value and falls back to the default.
+    float const turnDecay = std::isfinite(thread.botOnlyTurnDecay) && thread.botOnlyTurnDecay > 0.0f &&
+                                    thread.botOnlyTurnDecay <= 1.0f
+                                ? thread.botOnlyTurnDecay
+                                : PLAYERBOT_SOCIAL_BOT_ONLY_TURN_DECAY;
+
+    return DecayFactor(turnDecay, thread.consecutiveBotOnlyTurns) *
            DecayFactor(PLAYERBOT_SOCIAL_IDLE_DECAY_PER_INTERVAL, idleIntervals);
+}
+
+/*
+ * How full a quiet scope's ambient starter budget is, in [MIN_FILL, 1]. Linear in idle time so the
+ * expected wait for the next ambient line tracks the configured cadence, with a floor rather than
+ * zero so a scope is never hard-muted immediately after a line. A cadence of zero is an absent or
+ * unusable configuration and falls back to the default, matching how the density multipliers treat
+ * their invalid values.
+ */
+float AmbientFill(uint64 idleSeconds, uint32 cadenceSeconds)
+{
+    uint32 const cadence =
+        cadenceSeconds == 0 ? PLAYERBOT_SOCIAL_AMBIENT_CADENCE_DEFAULT_SECONDS : cadenceSeconds;
+    float const raw = static_cast<float>(idleSeconds) / static_cast<float>(cadence);
+
+    if (raw <= PLAYERBOT_SOCIAL_AMBIENT_MIN_FILL)
+        return PLAYERBOT_SOCIAL_AMBIENT_MIN_FILL;
+
+    return raw >= 1.0f ? 1.0f : raw;
 }
 
 /*
@@ -192,8 +218,10 @@ PlayerbotSocialOpportunityRejection PlayerbotSocialEvaluateOpportunity(Playerbot
     if (!PlayerbotSocialChannelIsValid(opportunity.channel))
         return PlayerbotSocialOpportunityRejection::UnsupportedChannel;
 
-    // Whisper is reactive only. Every other supported channel accepts a spontaneous starter.
-    if (opportunity.starter && opportunity.channel == PlayerbotSocialChannel::Whisper)
+    // Whisper is reactive by default. The one spontaneous whisper admitted is the relationship-
+    // driven check-in, whose justification arrives on the opportunity itself.
+    if (opportunity.starter && opportunity.channel == PlayerbotSocialChannel::Whisper &&
+        !opportunity.relationshipDriven)
         return PlayerbotSocialOpportunityRejection::StarterNotAllowedOnChannel;
 
     // Opting out of initiation stops a bot addressing someone first, and nothing more. A speaker
@@ -226,11 +254,45 @@ PlayerbotSocialOpportunityRejection PlayerbotSocialEvaluateOpportunity(Playerbot
     if (opportunity.duplicateOfRecentMessage)
         return PlayerbotSocialOpportunityRejection::DuplicateSuppressed;
 
-    if (!opportunity.starter && !opportunity.speakerIsHuman &&
-        opportunity.consecutiveBotOnlyTurns >= PLAYERBOT_SOCIAL_MAX_CONSECUTIVE_BOT_TURNS)
+    // Zero means an unset carrier, and falling back keeps the cap a bound rather than a mute.
+    uint32 const botTurnCap = opportunity.maxConsecutiveBotOnlyTurns == 0
+                                  ? PLAYERBOT_SOCIAL_MAX_CONSECUTIVE_BOT_TURNS
+                                  : opportunity.maxConsecutiveBotOnlyTurns;
+    if (!opportunity.starter && !opportunity.speakerIsHuman && opportunity.consecutiveBotOnlyTurns >= botTurnCap)
         return PlayerbotSocialOpportunityRejection::BotOnlyTurnLimit;
 
     return PlayerbotSocialOpportunityRejection::None;
+}
+
+PlayerbotSocialBudgetDecision PlayerbotSocialGovernProviderCall(PlayerbotSocialProviderBudgetState& state,
+                                                                uint64 nowUnixSeconds, uint32 hourlyBudget)
+{
+    // Zero is the operator saying "no ceiling"; refusing everything on it would be the failure the
+    // budget exists to prevent, pointed the other way.
+    if (hourlyBudget == 0)
+        return PlayerbotSocialBudgetDecision::Admitted;
+
+    auto const prune = [nowUnixSeconds](std::deque<uint64>& stamps)
+    {
+        while (!stamps.empty() && (nowUnixSeconds < stamps.front() ||
+                                   nowUnixSeconds - stamps.front() >= PLAYERBOT_SOCIAL_PROVIDER_BUDGET_WINDOW_SECONDS))
+            stamps.pop_front();
+    };
+
+    prune(state.admittedAtUnixSeconds);
+    prune(state.refusedAtUnixSeconds);
+
+    if (state.admittedAtUnixSeconds.size() < hourlyBudget)
+    {
+        state.admittedAtUnixSeconds.push_back(nowUnixSeconds);
+        return PlayerbotSocialBudgetDecision::Admitted;
+    }
+
+    state.refusedAtUnixSeconds.push_back(nowUnixSeconds);
+
+    // Refusals matching the budget inside one window means demand ran to at least twice the ceiling.
+    return state.refusedAtUnixSeconds.size() >= hourlyBudget ? PlayerbotSocialBudgetDecision::RefusedCircuitTrip
+                                                             : PlayerbotSocialBudgetDecision::Refused;
 }
 
 float PlayerbotSocialNormalizeDensityMultiplier(float value, float fallback)
@@ -267,23 +329,36 @@ float PlayerbotSocialReplyPressure(PlayerbotSocialThreadPressure const& thread, 
                          PLAYERBOT_SOCIAL_REPLY_PRESSURE_CEILING);
 }
 
-float PlayerbotSocialStarterPressure(PlayerbotSocialThreadPressure const& thread, float densityProfileMultiplier)
+float PlayerbotSocialStarterPressure(PlayerbotSocialThreadPressure const& thread, float densityProfileMultiplier,
+                                     uint32 ambientCadenceSeconds)
 {
     // A starter gets no human participation bonus. Someone else's conversation being lively is not a
-    // reason to begin a separate one, and leaving the bonus out is what keeps the starter lane below
-    // the reply lane even in the most active thread.
-    float const throttled = PLAYERBOT_SOCIAL_STARTER_PRESSURE_BASE *
+    // reason to begin a separate one.
+    /*
+     * Starters follow the ambient fill, not ThreadDecay. Decay made silence beget silence: every
+     * idle minute lowered the chance of the line that would have ended the idleness, so a quiet
+     * channel converged on permanent silence. The fill inverts that: pressure starts at the floor
+     * right after a line (a channel that just spoke should not be piled onto) and climbs linearly
+     * to the full starter pressure at the cadence point, so a quiet scope produces roughly one
+     * ambient line per cadence interval. Bot-only turn decay is deliberately absent here too: a
+     * starter opens a new subject, and carrying the previous thread's turn count forward would let
+     * bot conversation poison the next conversation.
+     */
+    uint64 const idleSeconds = ElapsedSeconds(thread.nowUnixSeconds, thread.lastActivityUnixSeconds);
+    float const throttled = PLAYERBOT_SOCIAL_STARTER_FULL_PRESSURE *
+                            AmbientFill(idleSeconds, ambientCadenceSeconds) *
                             (1.0f - PLAYERBOT_SOCIAL_STARTER_DENSITY_THROTTLE * ClampDensity(thread.channelDensity));
 
-    return BoundPressure(ScaleByDensityProfile(throttled * ThreadDecay(thread), densityProfileMultiplier),
+    return BoundPressure(ScaleByDensityProfile(throttled, densityProfileMultiplier),
                          PLAYERBOT_SOCIAL_REPLY_PRESSURE_CEILING);
 }
 
 float PlayerbotSocialStarterPressureForChannel(PlayerbotSocialChannel channel,
                                                PlayerbotSocialThreadPressure const& thread,
-                                               float densityProfileMultiplier, float generalMultiplier)
+                                               float densityProfileMultiplier, float generalMultiplier,
+                                               uint32 ambientCadenceSeconds)
 {
-    float const pressure = PlayerbotSocialStarterPressure(thread, densityProfileMultiplier);
+    float const pressure = PlayerbotSocialStarterPressure(thread, densityProfileMultiplier, ambientCadenceSeconds);
     if (channel != PlayerbotSocialChannel::General)
         return pressure;
 

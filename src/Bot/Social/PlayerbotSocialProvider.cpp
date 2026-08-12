@@ -373,6 +373,8 @@ char const* PlayerbotSocialDeliveryRejectionName(PlayerbotSocialDeliveryRejectio
             return "authorized_roleplay_in_combat";
         case PlayerbotSocialDeliveryRejection::LockedProgressionContent:
             return "locked_progression_content";
+        case PlayerbotSocialDeliveryRejection::BudgetExhausted:
+            return "budget_exhausted";
         default:
             break;
     }
@@ -430,6 +432,7 @@ bool PlayerbotSocialDeliveryRejectionIsValid(PlayerbotSocialDeliveryRejection re
         case PlayerbotSocialDeliveryRejection::LockedRoleplayContent:
         case PlayerbotSocialDeliveryRejection::AuthorizedRoleplayInCombat:
         case PlayerbotSocialDeliveryRejection::LockedProgressionContent:
+        case PlayerbotSocialDeliveryRejection::BudgetExhausted:
             return true;
         default:
             break;

@@ -3,7 +3,8 @@
 # Enable interactive Playerbot social behavior. Default: 0
 PlayerbotsSocial.Enable = 0
 
-# Rollout stage. Supported values: human_replies, grounded_presence. Default: human_replies
+# Rollout stage. Supported values: human_replies, grounded_presence, bounded_continuation,
+# autonomous_society. Default: human_replies
 PlayerbotsSocial.Stage = human_replies
 
 # Conversation density profile. Supported values: quiet, normal, lively. Default: normal
@@ -16,6 +17,28 @@ PlayerbotsSocial.DensityMultiplier.Lively = 1.60
 
 # Pressure multiplier for autonomous General conversation starters. Default: 0.55
 PlayerbotsSocial.GeneralStarterPressureMultiplier = 0.55
+
+# Seconds of scope silence at which ambient starter pressure saturates, so a quiet
+# channel converges on roughly one ambient line per interval. Zero falls back to the default. Default: 300
+PlayerbotsSocial.AmbientCadenceSeconds = 300
+
+# Applied only while the stage is autonomous_society. How many consecutive bot-only turns a thread
+# may run, and the per-turn pressure decay while it does. Earlier stages keep the built-in cap of 2
+# and decay of 0.62. Defaults: 6 and 0.85
+PlayerbotsSocial.Autonomous.MaxConsecutiveBotTurns = 6
+PlayerbotsSocial.Autonomous.BotTurnDecay = 0.85
+
+# Relationship-driven whisper check-ins, applied only while the stage is autonomous_society.
+# MinFamiliarity is how warm a pair must be before a bot may open a whisper; PairCooldownSeconds is
+# how long a pair rests between check-ins. Defaults: 0.01 and 21600 (6 hours)
+PlayerbotsSocial.Whisper.MinFamiliarity = 0.01
+PlayerbotsSocial.Whisper.PairCooldownSeconds = 21600
+
+# Server-wide LLM provider call ceiling per sliding hour. Requests beyond it are refused with the
+# budget_exhausted reason, and demand reaching twice the ceiling inside one hour opens the budget
+# circuit (durable; an operator closes it by clearing budget_circuit_open in
+# playerbot_social_runtime_control). Zero means no ceiling. Default: 120
+PlayerbotsSocial.Provider.HourlyBudget = 120
 
 # Social event retention in hours. Values below the privacy floor are raised to the floor. Default: 48
 PlayerbotsSocial.TelemetryRetentionHours = 48
