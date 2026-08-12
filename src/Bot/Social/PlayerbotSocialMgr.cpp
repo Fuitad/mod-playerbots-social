@@ -1927,6 +1927,63 @@ void PlayerbotSocialMgr::LoadRelationship(uint64 botGuidCounter, uint64 subjectG
         }));
 }
 
+void PlayerbotSocialMgr::PreloadWarmRelationships()
+{
+    if (_warmRelationshipPreloadIssued)
+        return;
+    _warmRelationshipPreloadIssued = true;
+
+    PlayerbotSocialPreparedStatement* statement =
+        NewPlayerbotSocialStatement(PLAYERBOT_SOCIAL_STMT_SEL_WARM_RELATIONSHIPS);
+    statement->SetData(0, sPlayerbotSocialConfig.socialChatWhisperMinFamiliarity);
+    statement->SetData(1, static_cast<uint32>(PLAYERBOT_SOCIAL_WARM_RELATIONSHIP_PRELOAD_LIMIT));
+
+    uint64 const epoch = _stateEpoch;
+
+    SocialQueryProcessor().AddCallback(PlayerbotSocialAsyncQuery(statement).WithCallback(
+        [this, epoch](QueryResult result)
+        {
+            // A reset or cohort purge landed while the read was in flight; its answer predates an
+            // erasure it could not have seen.
+            if (epoch != _stateEpoch)
+                return;
+
+            if (!result)
+                return;
+
+            do
+            {
+                Field* fields = result->Fetch();
+                PlayerbotSocialRelationshipValues values;
+                values.familiarity = fields[2].Get<float>();
+                values.affinity = fields[3].Get<float>();
+                values.trust = fields[4].Get<float>();
+                ApplyPreloadedRelationship(fields[0].Get<uint32>(), fields[1].Get<uint32>(), values);
+            } while (result->NextRow());
+        }));
+}
+
+void PlayerbotSocialMgr::ApplyPreloadedRelationship(uint64 botGuidCounter, uint64 subjectGuidCounter,
+                                                    PlayerbotSocialRelationshipValues const& values)
+{
+    if (botGuidCounter == 0 || subjectGuidCounter == 0)
+        return;
+
+    /*
+     * A reset in flight wins over a preload, exactly as it wins over any other durable write. The
+     * full fail-closed consent check is deliberately NOT applied here: at world initialization
+     * nobody's consent is loaded yet, so it would refuse every pair and the preload would do
+     * nothing. Consent KNOWN to be withdrawn still refuses the apply, inside the store's own
+     * write check, and a pair whose consent is merely unloaded stays unusable until it is read,
+     * because the pump and the request path both apply the fail-closed check before acting.
+     */
+    if (_resetPending.find(botGuidCounter) != _resetPending.end() ||
+        _resetPending.find(subjectGuidCounter) != _resetPending.end())
+        return;
+
+    _state.RememberRelationship({botGuidCounter, subjectGuidCounter}, PlayerbotSocialClampRelationship(values));
+}
+
 void PlayerbotSocialMgr::LoadMemories(uint64 botGuidCounter, PlayerbotSocialChannel channel, uint64 nowUnixSeconds)
 {
     if (!PairMayBeStored(botGuidCounter, 0))
@@ -4352,7 +4409,10 @@ PlayerbotSocialActivationResult PlayerbotSocialMgr::Activate(PlayerbotSocialActi
     pressure.nowUnixSeconds = activation.nowUnixSeconds;
     pressure.channelDensity = activation.channelDensity;
     if (autonomousStage)
+    {
         pressure.botOnlyTurnDecay = sPlayerbotSocialConfig.socialChatAutonomousBotTurnDecay;
+        pressure.botOnlyContinuationBase = sPlayerbotSocialConfig.socialChatAutonomousContinuationPressureBase;
+    }
 
     PlayerbotSocialDensityMultipliers multipliers;
     multipliers.quiet = sPlayerbotSocialConfig.socialChatDensityMultiplierQuiet;

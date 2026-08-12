@@ -62,6 +62,10 @@ inline constexpr std::size_t PLAYERBOT_SOCIAL_MAX_THREADS_PER_SCOPE = 6;
 inline constexpr std::size_t PLAYERBOT_SOCIAL_MAX_THREAD_PARTICIPANTS = 8;
 inline constexpr std::size_t PLAYERBOT_SOCIAL_MAX_THREAD_EVENTS = 12;
 
+// How many durable warm pairs the startup preload reads into the snapshot: the same bound the
+// whisper pump's scan applies, because the preload exists solely to feed that scan.
+inline constexpr std::size_t PLAYERBOT_SOCIAL_WARM_RELATIONSHIP_PRELOAD_LIMIT = 64;
+
 /*
  * How many recent lines a thread recognises as already said.
  *
@@ -1119,6 +1123,24 @@ public:
     void LoadRelationship(uint64 botGuidCounter, uint64 subjectGuidCounter, uint64 nowUnixSeconds);
 
     /*
+     * Begins one asynchronous read of the warmest durable relationships into the snapshot, once
+     * per uptime, at world initialization. The whisper pump reads only the in-memory store, so
+     * without this every restart hid the durable warm pairs until each happened to re-converse,
+     * and a relationship-driven whisper could never open inside a fresh uptime.
+     */
+    void PreloadWarmRelationships();
+
+    /*
+     * Applies one preloaded pair to the snapshot, clamped. Split from the query callback so the
+     * seam the whisper pump depends on is provable without a database: a pair applied here must
+     * come back out of WarmRelationships. Consent KNOWN to be withdrawn refuses the apply (the
+     * store enforces that itself); a pair whose consent is merely unloaded is cached but unusable,
+     * because every consumer applies the fail-closed consent check before acting on it.
+     */
+    void ApplyPreloadedRelationship(uint64 botGuidCounter, uint64 subjectGuidCounter,
+                                    PlayerbotSocialRelationshipValues const& values);
+
+    /*
      * Begins an asynchronous read of one bot's memories, restricted to the scopes `channel` may
      * read. The restriction is carried by the choice of statement, each of which has its scope list
      * written as a literal, so no binding mistake can widen it. An invalid channel reads nothing.
@@ -2055,6 +2077,9 @@ private:
 
     // False until LoadRuntimeControl has run, so a default is never mistaken for a stored answer.
     bool _runtimeControlLoaded = false;
+
+    // One warm-relationship preload per uptime; the flag makes a repeated world-init call free.
+    bool _warmRelationshipPreloadIssued = false;
 
     // Writes the whole control row. Split out only because both the apply path and the startup path
     // that has to create a first row need it.

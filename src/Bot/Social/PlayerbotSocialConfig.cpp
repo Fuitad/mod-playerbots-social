@@ -25,6 +25,10 @@ PlayerbotSocialConfigValues NormalizePlayerbotSocialConfig(PlayerbotSocialConfig
     if (!std::isfinite(values.socialChatAutonomousBotTurnDecay) || values.socialChatAutonomousBotTurnDecay <= 0.0f ||
         values.socialChatAutonomousBotTurnDecay > 1.0f)
         values.socialChatAutonomousBotTurnDecay = 0.85f;
+    if (!std::isfinite(values.socialChatAutonomousContinuationPressureBase) ||
+        values.socialChatAutonomousContinuationPressureBase <= 0.0f ||
+        values.socialChatAutonomousContinuationPressureBase > 1.0f)
+        values.socialChatAutonomousContinuationPressureBase = 0.8f;
     if (!std::isfinite(values.socialChatWhisperMinFamiliarity) || values.socialChatWhisperMinFamiliarity <= 0.0f ||
         values.socialChatWhisperMinFamiliarity > 1.0f)
         values.socialChatWhisperMinFamiliarity = 0.01f;
@@ -55,6 +59,8 @@ void ReloadPlayerbotSocialConfig()
         sConfigMgr->GetOption<uint32>("PlayerbotsSocial.Autonomous.MaxConsecutiveBotTurns", 6);
     values.socialChatAutonomousBotTurnDecay =
         sConfigMgr->GetOption<float>("PlayerbotsSocial.Autonomous.BotTurnDecay", 0.85f);
+    values.socialChatAutonomousContinuationPressureBase =
+        sConfigMgr->GetOption<float>("PlayerbotsSocial.Autonomous.ContinuationPressureBase", 0.8f);
     values.socialChatWhisperMinFamiliarity =
         sConfigMgr->GetOption<float>("PlayerbotsSocial.Whisper.MinFamiliarity", 0.01f);
     values.socialChatWhisperPairCooldownSeconds =

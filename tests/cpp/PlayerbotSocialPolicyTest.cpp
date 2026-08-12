@@ -958,6 +958,43 @@ TEST(PlayerbotSocialPressureTest, ReplyPressureTurnDecayIsConfigurablePerThread)
     EXPECT_GE(soft, 0.2f);
 }
 
+TEST(PlayerbotSocialPressureTest, BotOnlyContinuationBaseLiftsEarlyTurnsWithoutTouchingHumanThreads)
+{
+    /*
+     * The live window measured ~11% end-to-end reply survival per delivered bot line, so a
+     * three-reply chain (the four-turn thread the oracle asks for) almost never formed. The
+     * autonomous stage may carry a higher participation base for BOT-ONLY continuations on the
+     * thread state, the same way it carries the softened turn decay; a thread a human is part of
+     * keeps the default base, and decay plus the ceiling still wind a long thread down.
+     */
+    PlayerbotSocialThreadPressure botOnly;
+    botOnly.consecutiveBotOnlyTurns = 1;  // rolling for the thread's second turn
+    botOnly.lastActivityUnixSeconds = 1000;
+    botOnly.nowUnixSeconds = 1000;
+    botOnly.botOnlyTurnDecay = 0.85f;
+
+    PlayerbotSocialThreadPressure lifted = botOnly;
+    lifted.botOnlyContinuationBase = 0.8f;
+
+    EXPECT_GT(PlayerbotSocialReplyPressure(lifted), PlayerbotSocialReplyPressure(botOnly));
+
+    // A second turn must be probable, not merely possible: 0.8 * 0.85 clears three fifths.
+    EXPECT_GE(PlayerbotSocialReplyPressure(lifted), 0.6f);
+
+    // With a human in the thread the carried base is ignored: the lift belongs to the autonomous
+    // bot-only lane, never to a conversation a player is part of.
+    PlayerbotSocialThreadPressure humanThread = lifted;
+    humanThread.relevantHumanMessages = 2;
+    PlayerbotSocialThreadPressure humanDefault = botOnly;
+    humanDefault.relevantHumanMessages = 2;
+    EXPECT_FLOAT_EQ(PlayerbotSocialReplyPressure(humanThread), PlayerbotSocialReplyPressure(humanDefault));
+
+    // An unusable carrier value falls back to the default rather than zeroing the lane.
+    PlayerbotSocialThreadPressure corrupt = botOnly;
+    corrupt.botOnlyContinuationBase = -1.0f;
+    EXPECT_FLOAT_EQ(PlayerbotSocialReplyPressure(corrupt), PlayerbotSocialReplyPressure(botOnly));
+}
+
 TEST(PlayerbotSocialPressureTest, StarterPressureRisesTowardCadenceAsAScopeStaysQuiet)
 {
     /*

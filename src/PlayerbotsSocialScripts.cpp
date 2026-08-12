@@ -312,6 +312,7 @@ public:
     void OnBeforeWorldInitialized() override
     {
         sPlayerbotSocialMgr.LoadRuntimeControl();
+        sPlayerbotSocialMgr.PreloadWarmRelationships();
         SetPlayerbotSocialControlAcceptingRequests(true);
     }
 

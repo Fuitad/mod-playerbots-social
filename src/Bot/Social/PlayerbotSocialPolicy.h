@@ -386,6 +386,14 @@ struct PlayerbotSocialThreadPressure
     // thread survives to a real length; earlier stages keep the default. Out-of-range values are
     // clamped back to the default on use.
     float botOnlyTurnDecay = PLAYERBOT_SOCIAL_BOT_ONLY_TURN_DECAY;
+
+    /*
+     * Participation base for a BOT-ONLY continuation. The autonomous stage raises it so a bot
+     * conversation's early turns continue with real probability (at the default base a three-reply
+     * chain almost never formed live); a thread with human participation always uses the default
+     * base, and earlier stages keep this at the default. Out-of-range values fall back on use.
+     */
+    float botOnlyContinuationBase = PLAYERBOT_SOCIAL_REPLY_PRESSURE_BASE;
 };
 
 // Probability that an eligible bot should answer in this thread right now. Strictly inside (0, 1).

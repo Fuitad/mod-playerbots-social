@@ -354,8 +354,16 @@ float PlayerbotSocialDensityMultiplier(PlayerbotSocialDensityProfile profile,
 
 float PlayerbotSocialReplyPressure(PlayerbotSocialThreadPressure const& thread, float densityProfileMultiplier)
 {
-    float const participation =
-        PLAYERBOT_SOCIAL_REPLY_PRESSURE_BASE + HumanParticipationBonus(thread.relevantHumanMessages);
+    /*
+     * The carried base applies only while the thread is bot-only: the autonomous stage lifts it so
+     * early bot turns chain, and the moment a human participates the default base (plus the human
+     * bonus) is authoritative again. An unusable carrier falls back exactly as the turn decay does.
+     */
+    bool const carriedBaseUsable = std::isfinite(thread.botOnlyContinuationBase) &&
+                                   thread.botOnlyContinuationBase > 0.0f && thread.botOnlyContinuationBase <= 1.0f;
+    float const base = thread.relevantHumanMessages == 0 && carriedBaseUsable ? thread.botOnlyContinuationBase
+                                                                              : PLAYERBOT_SOCIAL_REPLY_PRESSURE_BASE;
+    float const participation = base + HumanParticipationBonus(thread.relevantHumanMessages);
     float const throttled =
         participation * (1.0f - PLAYERBOT_SOCIAL_REPLY_DENSITY_THROTTLE * ClampDensity(thread.channelDensity));
 

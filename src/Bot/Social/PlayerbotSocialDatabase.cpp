@@ -176,6 +176,17 @@ std::string_view StatementSql(PlayerbotSocialStatementId id)
             return "SELECT paused, density_profile, general_enabled, say_enabled, party_enabled, whisper_enabled, "
                    "budget_circuit_open, budget_circuit_reason, budget_circuit_opened_at "
                    "FROM playerbot_social_runtime_control WHERE id = 1";
+        case PLAYERBOT_SOCIAL_STMT_SEL_WARM_RELATIONSHIPS:
+            /*
+             * The startup preload for the whisper pump: the warmest pairs, resolved back to the
+             * character guids the in-memory store is keyed by. Ordered warmest-first so the LIMIT
+             * keeps the pairs the pump would act on soonest.
+             */
+            return "SELECT bot_actor.character_guid, subject_actor.character_guid, r.familiarity, r.affinity, "
+                   "r.trust FROM playerbot_social_relationship r "
+                   "JOIN playerbot_social_actor bot_actor ON bot_actor.id = r.bot_actor_id "
+                   "JOIN playerbot_social_actor subject_actor ON subject_actor.id = r.subject_actor_id "
+                   "WHERE r.familiarity >= ? ORDER BY r.familiarity DESC LIMIT ?";
         case PLAYERBOT_SOCIAL_STMT_UPD_BUDGET_CIRCUIT:
             // The mirror image of the control statement above: its UPDATE arm touches ONLY the
             // circuit columns, so the governor can never overwrite an operator's pause, density, or

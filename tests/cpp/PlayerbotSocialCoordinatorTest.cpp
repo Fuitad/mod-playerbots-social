@@ -2931,6 +2931,48 @@ TEST(PlayerbotSocialCoordinatorTest, APerceivableStarterCarriesItsAudienceToTheP
     coordinator.SetSocialProvider(nullptr);
 }
 
+TEST(PlayerbotSocialCoordinatorTest, APreloadedWarmRelationshipIsVisibleToTheWhisperScan)
+{
+    /*
+     * The whisper pump reads only the in-memory relationship store, which starts empty on every
+     * worldserver restart, so durable warm pairs were invisible until each pair happened to
+     * re-converse in the current uptime and no whisper could ever fire in a fresh uptime's
+     * observation window. The startup preload applies durable rows through this seam; the pump's
+     * own WarmRelationships read is what the assertion goes through.
+     */
+    PlayerbotSocialMgr coordinator;
+
+    PlayerbotSocialRelationshipValues values;
+    values.familiarity = 0.1f;
+    values.affinity = 0.08f;
+    values.trust = 0.05f;
+    coordinator.ApplyPreloadedRelationship(500, 900, values);
+
+    std::vector<PlayerbotSocialWarmRelationship> const warm = coordinator.State().WarmRelationships(0.01f, 10);
+    ASSERT_EQ(warm.size(), 1u);
+    EXPECT_EQ(warm.front().key.botGuidCounter, 500u);
+    EXPECT_EQ(warm.front().key.subjectGuidCounter, 900u);
+    EXPECT_FLOAT_EQ(warm.front().values.familiarity, 0.1f);
+}
+
+TEST(PlayerbotSocialCoordinatorTest, AKnownOptedOutPairIsNeverPreloaded)
+{
+    /*
+     * Consent known to be withdrawn suppresses the cache read exactly as it suppresses every other
+     * durable read. A pair whose consent is merely UNLOADED may sit in the cache, because every
+     * consumer (the pump, the request path, every durable write) applies the fail-closed consent
+     * check itself before acting on it.
+     */
+    PlayerbotSocialMgr coordinator;
+    coordinator.SetOptedOut(900, true);
+
+    PlayerbotSocialRelationshipValues values;
+    values.familiarity = 0.1f;
+    coordinator.ApplyPreloadedRelationship(500, 900, values);
+
+    EXPECT_TRUE(coordinator.State().WarmRelationships(0.01f, 10).empty());
+}
+
 TEST(PlayerbotSocialCoordinatorTest, AReplyCarriesItsGroundedParticipantToTheProvider)
 {
     /*

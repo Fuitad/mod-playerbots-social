@@ -20,6 +20,7 @@ struct PlayerbotSocialConfigValues
     // two-turn cap and 0.62 decay untouched.
     uint32 socialChatAutonomousMaxConsecutiveBotTurns = 6;
     float socialChatAutonomousBotTurnDecay = 0.85f;
+    float socialChatAutonomousContinuationPressureBase = 0.8f;
 
     // Relationship-driven whisper check-ins (autonomous_society only): how warm a pair must be
     // before a bot may open a whisper, and how long a pair rests between check-ins.

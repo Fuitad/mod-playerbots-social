@@ -28,6 +28,12 @@ PlayerbotsSocial.AmbientCadenceSeconds = 300
 PlayerbotsSocial.Autonomous.MaxConsecutiveBotTurns = 6
 PlayerbotsSocial.Autonomous.BotTurnDecay = 0.85
 
+# Participation base for a bot-only continuation while the stage is autonomous_society, so a bot
+# conversation's early turns continue with real probability and threads reach conversational
+# length. Threads a human participates in always use the built-in base of 0.45. Range (0, 1].
+# Default: 0.8
+PlayerbotsSocial.Autonomous.ContinuationPressureBase = 0.8
+
 # Relationship-driven whisper check-ins, applied only while the stage is autonomous_society.
 # MinFamiliarity is how warm a pair must be before a bot may open a whisper; PairCooldownSeconds is
 # how long a pair rests between check-ins. Defaults: 0.01 and 21600 (6 hours)
