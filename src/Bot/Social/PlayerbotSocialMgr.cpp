@@ -4386,11 +4386,19 @@ PlayerbotSocialActivationResult PlayerbotSocialMgr::Activate(PlayerbotSocialActi
      * Carrying the speaker on a General line would make a room remark look like a private reply in
      * every downstream consumer. A whisper STARTER has no speaker: its addressee is the audience the
      * relationship check-in was opened for.
+     *
+     * A say or party starter carries its audience too, and this is load bearing rather than
+     * decorative: those channels ground against a perceivable audience, so their grounding can name
+     * that audience as a Participant, and the provider refuses Participant evidence whose subject
+     * did not travel on the request. A target of zero here made every say starter die as
+     * provider_failed before a prompt was ever built. Delivery is unaffected: only whisper and
+     * emote sends consult the target.
      */
-    uint64 const target = activation.channel == PlayerbotSocialChannel::Whisper
-                              ? (activation.starter ? activation.starterAudienceGuidCounter
-                                                    : activation.speakerGuidCounter)
-                              : 0;
+    uint64 target = 0;
+    if (activation.channel == PlayerbotSocialChannel::Whisper)
+        target = activation.starter ? activation.starterAudienceGuidCounter : activation.speakerGuidCounter;
+    else if (activation.starter && PlayerbotSocialStarterParticipantIsPerceivable(activation.channel))
+        target = activation.starterAudienceGuidCounter;
 
     for (uint64 const responder : result.selection.responders)
     {

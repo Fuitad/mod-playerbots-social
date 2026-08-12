@@ -2668,8 +2668,9 @@ public:
     std::vector<std::string> assessmentCurrentLines;
     std::vector<std::vector<std::string>> assessmentThreadLines;
     std::vector<uint64> generationTokens;
+    std::vector<uint64> submittedTargets;
 
-    bool Submit(uint64 requestToken, uint64 /*botGuidCounter*/, uint64 /*targetGuidCounter*/,
+    bool Submit(uint64 requestToken, uint64 /*botGuidCounter*/, uint64 targetGuidCounter,
                 PlayerbotSocialChannel /*channel*/, std::string const& /*threadPublicId*/,
                 PlayerbotSocialRequestPriority /*priority*/, PlayerbotSocialRequestContext const& /*context*/) override
     {
@@ -2677,6 +2678,7 @@ public:
             return false;
 
         generationTokens.push_back(requestToken);
+        submittedTargets.push_back(targetGuidCounter);
         return true;
     }
 
@@ -2832,6 +2834,50 @@ TEST(PlayerbotSocialCoordinatorTest, RejectedBaseProfileStillOpensAProviderReque
     EXPECT_TRUE(result.refusedCandidates.empty());
     ASSERT_EQ(result.openedTokens.size(), 1u);
     EXPECT_EQ(provider.generationTokens.size(), 1u);
+    coordinator.SetSocialProvider(nullptr);
+}
+
+TEST(PlayerbotSocialCoordinatorTest, APerceivableStarterCarriesItsAudienceToTheProvider)
+{
+    /*
+     * A say or party starter grounds against a perceivable audience, so its grounding envelope can
+     * carry Participant evidence naming that audience. The provider validates every Participant
+     * entry against the request's wire subject and refuses an absent one, so the audience must
+     * travel as the subject or the request dies as provider_failed before any prompt is built.
+     * That mismatch is exactly what silenced every say starter on live.
+     */
+    PlayerbotSocialMgr coordinator;
+    RoleplayAssessmentProvider provider;
+    coordinator.SetSocialProvider(&provider);
+    coordinator.ApplyConsentSnapshot(900, false);
+
+    PlayerbotSocialThreadKey key;
+    key.channel = PlayerbotSocialChannel::Say;
+    key.scopeId = 77;
+    PlayerbotSocialThreadHandle const thread = coordinator.OpenStarterThread(key, 1000);
+
+    PlayerbotSocialActivation activation;
+    activation.thread = thread;
+    activation.channel = PlayerbotSocialChannel::Say;
+    activation.starter = true;
+    activation.starterSourceBotGuidCounter = 500;
+    activation.starterAudienceGuidCounter = 900;
+    activation.starterSubject = "zone_arrival: Westfall";
+    activation.threadLastActivityUnixSeconds = 1000;
+    activation.nowUnixSeconds = 1000 + PLAYERBOT_SOCIAL_AMBIENT_CADENCE_DEFAULT_SECONDS;
+    activation.zoneId = 12;
+    PlayerbotSocialActivationCandidate candidate = RoleplayWillingCandidate(500);
+    candidate.grounding = GroundingFor(500, 900, activation.nowUnixSeconds, {});
+    activation.candidates.push_back(std::move(candidate));
+
+    for (uint64 seed = 1; seed < 4096 && provider.submittedTargets.empty(); ++seed)
+    {
+        activation.selectionSeed = seed;
+        coordinator.Activate(activation, PlayerbotSocialDensityProfile::Normal);
+    }
+
+    ASSERT_FALSE(provider.submittedTargets.empty()) << "no seed opened the starter";
+    EXPECT_EQ(provider.submittedTargets.front(), 900u);
     coordinator.SetSocialProvider(nullptr);
 }
 
