@@ -11,5 +11,5 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_LIST_DIR}/tests/cpp/PlayerbotSocialRouteTest.cpp")
   set_property(GLOBAL APPEND PROPERTY ACORE_MODULE_TEST_INCLUDES
     "${CMAKE_CURRENT_LIST_DIR}/src"
-    "${CMAKE_SOURCE_DIR}/modules/mod-playerbot-personality/src")
+    "${CMAKE_SOURCE_DIR}/modules/mod-playerbots-personality/src")
 endif()
