@@ -613,7 +613,8 @@ uint64 PlayerbotSocialSayCohortRegistry::Resolve(std::vector<uint64> members, ui
     if (members.empty())
         return 0;
 
-    Prune(nowUnixSeconds);
+    std::lock_guard lock(_mutex);
+    PruneLocked(nowUnixSeconds);
     auto const found = _entries.find(members);
     if (found != _entries.end())
     {
@@ -633,6 +634,12 @@ uint64 PlayerbotSocialSayCohortRegistry::Resolve(std::vector<uint64> members, ui
 }
 
 void PlayerbotSocialSayCohortRegistry::Prune(uint64 nowUnixSeconds)
+{
+    std::lock_guard lock(_mutex);
+    PruneLocked(nowUnixSeconds);
+}
+
+void PlayerbotSocialSayCohortRegistry::PruneLocked(uint64 nowUnixSeconds)
 {
     for (auto entry = _entries.begin(); entry != _entries.end();)
     {

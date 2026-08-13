@@ -10,6 +10,7 @@
 #include <array>
 #include <cstddef>
 #include <map>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -332,6 +333,9 @@ private:
         uint64 lastUsedUnixSeconds = 0;
     };
 
+    void PruneLocked(uint64 nowUnixSeconds);
+
+    std::mutex _mutex;
     std::map<std::vector<uint64>, Entry> _entries;
     uint64 _nextScopeId = 1;
 };

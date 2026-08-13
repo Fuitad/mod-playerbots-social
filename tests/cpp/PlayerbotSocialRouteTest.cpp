@@ -4,10 +4,12 @@
  * or (at your option) any later version.
  */
 
+#include <barrier>
 #include <cstddef>
 #include <iterator>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "Bot/Engine/AiObjectContext.h"
@@ -1014,6 +1016,47 @@ TEST(PlayerbotSocialScopeTest, HearingCohortsAreCanonicalAndExpireWithConversati
     registry.Prune(1000 + PLAYERBOT_SOCIAL_THREAD_STALE_SECONDS + 2);
     EXPECT_NE(registry.Resolve({10, 20, 30}, 1000 + PLAYERBOT_SOCIAL_THREAD_STALE_SECONDS + 3), first)
         << "a cohort identity cannot outlive the thread retention window";
+}
+
+TEST(PlayerbotSocialScopeTest, ConcurrentResolveAndPruneKeepOneCanonicalScopePerCohort)
+{
+    constexpr std::size_t RESOLVER_COUNT = 8;
+    constexpr std::size_t ITERATION_COUNT = 2000;
+
+    PlayerbotSocialSayCohortRegistry registry;
+    std::barrier iterationStart(RESOLVER_COUNT + 1);
+    std::vector<std::vector<uint64>> resolved(RESOLVER_COUNT, std::vector<uint64>(ITERATION_COUNT));
+    std::vector<std::thread> workers;
+    workers.reserve(RESOLVER_COUNT + 1);
+
+    for (std::size_t worker = 0; worker < RESOLVER_COUNT; ++worker)
+    {
+        workers.emplace_back([&, worker] {
+            for (std::size_t iteration = 0; iteration < ITERATION_COUNT; ++iteration)
+            {
+                uint64 const now = 1 + iteration * (PLAYERBOT_SOCIAL_THREAD_STALE_SECONDS + 2);
+                iterationStart.arrive_and_wait();
+                resolved[worker][iteration] = registry.Resolve({iteration + 1, iteration + 10001}, now);
+            }
+        });
+    }
+
+    workers.emplace_back([&] {
+        for (std::size_t iteration = 0; iteration < ITERATION_COUNT; ++iteration)
+        {
+            uint64 const now = 1 + iteration * (PLAYERBOT_SOCIAL_THREAD_STALE_SECONDS + 2);
+            iterationStart.arrive_and_wait();
+            registry.Prune(now);
+        }
+    });
+
+    for (std::thread& worker : workers)
+        worker.join();
+
+    for (std::size_t iteration = 0; iteration < ITERATION_COUNT; ++iteration)
+        for (std::size_t worker = 1; worker < RESOLVER_COUNT; ++worker)
+            EXPECT_EQ(resolved[worker][iteration], resolved[0][iteration])
+                << "iteration=" << iteration << " worker=" << worker;
 }
 
 TEST(PlayerbotSocialScopeTest, BothDirectionsOfOneWhisperShareOneScope)
