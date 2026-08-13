@@ -970,7 +970,8 @@ void PlayerbotSocialMgr::PruneStaleThreads(uint64 nowUnixSeconds)
         }
 
         threads.erase(std::remove_if(threads.begin(), threads.end(),
-                                     [nowUnixSeconds](Thread const& thread) {
+                                     [nowUnixSeconds](Thread const& thread)
+                                     {
                                          return ElapsedSeconds(nowUnixSeconds, thread.lastActivityUnixSeconds) >
                                                 PLAYERBOT_SOCIAL_THREAD_STALE_SECONDS;
                                      }),
@@ -1078,8 +1079,7 @@ std::vector<PlayerbotSocialConversationCredit> PlayerbotSocialConversationCredit
 {
     std::vector<PlayerbotSocialConversationCredit> credits;
 
-    if (speakerGuidCounter == 0 || previousSpeakerGuidCounter == 0 ||
-        speakerGuidCounter == previousSpeakerGuidCounter)
+    if (speakerGuidCounter == 0 || previousSpeakerGuidCounter == 0 || speakerGuidCounter == previousSpeakerGuidCounter)
         return credits;
 
     PlayerbotSocialRelationshipValues delta;
@@ -3408,7 +3408,8 @@ void PlayerbotSocialMgr::LoadRuntimeControl()
     // operator closes the row, and rebooting the server is not an operator closing the row.
     _runtimeControl.budgetCircuitOpen = fields[2 + PLAYERBOT_SOCIAL_CHANNEL_COUNT].Get<bool>();
     if (_runtimeControl.budgetCircuitOpen)
-        LOG_WARN("playerbots", "Social budget circuit is OPEN (reason={}); the feature stays silent until "
+        LOG_WARN("playerbots",
+                 "Social budget circuit is OPEN (reason={}); the feature stays silent until "
                  "an operator closes it.",
                  fields[3 + PLAYERBOT_SOCIAL_CHANNEL_COUNT].Get<std::string>());
 
@@ -3965,7 +3966,8 @@ void PlayerbotSocialMgr::NoteHostileLine(uint64 subjectGuidCounter, uint64 speak
     PlayerbotSocialModerationCaseBinding const binding =
         PlayerbotSocialBuildModerationCaseBinding(subject->second, category, tally, speakerActorId, text);
 
-    PlayerbotSocialPreparedStatement* statement = NewPlayerbotSocialStatement(PLAYERBOT_SOCIAL_STMT_INS_MODERATION_CASE);
+    PlayerbotSocialPreparedStatement* statement =
+        NewPlayerbotSocialStatement(PLAYERBOT_SOCIAL_STMT_INS_MODERATION_CASE);
     statement->SetData(0, MakeModerationCasePublicId(subjectGuidCounter, category));
     statement->SetData(1, binding.subjectActorId);
     statement->SetData(2, binding.category);
@@ -3997,8 +3999,7 @@ bool PlayerbotSocialMgr::NoteWhisperStarterAttempt(PlayerbotSocialRelationshipKe
         return false;
 
     auto const stamped = _whisperStarterAttempts.find(key);
-    if (stamped != _whisperStarterAttempts.end() &&
-        ElapsedSeconds(nowUnixSeconds, stamped->second) < cooldownSeconds)
+    if (stamped != _whisperStarterAttempts.end() && ElapsedSeconds(nowUnixSeconds, stamped->second) < cooldownSeconds)
         return false;
 
     /*
@@ -4337,8 +4338,7 @@ PlayerbotSocialActivationResult PlayerbotSocialMgr::Activate(PlayerbotSocialActi
      * stage keeps the built-in cap and decay, so enabling the stage is the only way to change how
      * long bots talk among themselves.
      */
-    bool const autonomousStage =
-        PlayerbotSocialEffectiveGate().stage == PlayerbotSocialRolloutStage::AutonomousSociety;
+    bool const autonomousStage = PlayerbotSocialEffectiveGate().stage == PlayerbotSocialRolloutStage::AutonomousSociety;
 
     for (PlayerbotSocialActivationCandidate const& candidate : activation.candidates)
     {

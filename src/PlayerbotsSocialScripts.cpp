@@ -166,11 +166,11 @@ class PlayerbotsSocialPlayerScript final : public PlayerScript
 {
 public:
     PlayerbotsSocialPlayerScript()
-        : PlayerScript("PlayerbotsSocialPlayerScript",
-                       {PLAYERHOOK_ON_LOGIN, PLAYERHOOK_ON_LOGOUT, PLAYERHOOK_CAN_PLAYER_USE_CHAT,
-                        PLAYERHOOK_CAN_PLAYER_USE_PRIVATE_CHAT, PLAYERHOOK_CAN_PLAYER_USE_GROUP_CHAT,
-                        PLAYERHOOK_CAN_PLAYER_USE_CHANNEL_CHAT, PLAYERHOOK_ON_UPDATE_ZONE,
-                        PLAYERHOOK_ON_PLAYER_JUST_DIED})
+        : PlayerScript(
+              "PlayerbotsSocialPlayerScript",
+              {PLAYERHOOK_ON_LOGIN, PLAYERHOOK_ON_LOGOUT, PLAYERHOOK_CAN_PLAYER_USE_CHAT,
+               PLAYERHOOK_CAN_PLAYER_USE_PRIVATE_CHAT, PLAYERHOOK_CAN_PLAYER_USE_GROUP_CHAT,
+               PLAYERHOOK_CAN_PLAYER_USE_CHANNEL_CHAT, PLAYERHOOK_ON_UPDATE_ZONE, PLAYERHOOK_ON_PLAYER_JUST_DIED})
     {
     }
 

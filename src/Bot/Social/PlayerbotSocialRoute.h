@@ -173,8 +173,8 @@ struct PlayerbotSocialInboundDecision
  */
 [[nodiscard]] bool PlayerbotSocialChannelFromChatSource(ChatChannelSource source, PlayerbotSocialChannel& channel);
 
-[[nodiscard]] bool PlayerbotSocialIsFunctionalTraffic(PlayerbotAI* botAI, ChatChannelSource source,
-                                                       bool machineTraffic, std::string const& message);
+[[nodiscard]] bool PlayerbotSocialIsFunctionalTraffic(PlayerbotAI* botAI, ChatChannelSource source, bool machineTraffic,
+                                                      std::string const& message);
 
 /*
  * What the router needs to know about the moment a message arrived, as opposed to the surface it

@@ -90,10 +90,10 @@ float ThreadDecay(PlayerbotSocialThreadPressure const& thread)
 
     // The per-turn decay rides on the thread state so the autonomous stage can soften it. Anything
     // outside (0, 1] is an unusable carrier value and falls back to the default.
-    float const turnDecay = std::isfinite(thread.botOnlyTurnDecay) && thread.botOnlyTurnDecay > 0.0f &&
-                                    thread.botOnlyTurnDecay <= 1.0f
-                                ? thread.botOnlyTurnDecay
-                                : PLAYERBOT_SOCIAL_BOT_ONLY_TURN_DECAY;
+    float const turnDecay =
+        std::isfinite(thread.botOnlyTurnDecay) && thread.botOnlyTurnDecay > 0.0f && thread.botOnlyTurnDecay <= 1.0f
+            ? thread.botOnlyTurnDecay
+            : PLAYERBOT_SOCIAL_BOT_ONLY_TURN_DECAY;
 
     return DecayFactor(turnDecay, thread.consecutiveBotOnlyTurns) *
            DecayFactor(PLAYERBOT_SOCIAL_IDLE_DECAY_PER_INTERVAL, idleIntervals);
@@ -108,8 +108,7 @@ float ThreadDecay(PlayerbotSocialThreadPressure const& thread)
  */
 float AmbientFill(uint64 idleSeconds, uint32 cadenceSeconds)
 {
-    uint32 const cadence =
-        cadenceSeconds == 0 ? PLAYERBOT_SOCIAL_AMBIENT_CADENCE_DEFAULT_SECONDS : cadenceSeconds;
+    uint32 const cadence = cadenceSeconds == 0 ? PLAYERBOT_SOCIAL_AMBIENT_CADENCE_DEFAULT_SECONDS : cadenceSeconds;
     float const raw = static_cast<float>(idleSeconds) / static_cast<float>(cadence);
 
     if (raw <= PLAYERBOT_SOCIAL_AMBIENT_MIN_FILL)
@@ -250,10 +249,9 @@ PlayerbotSocialOpportunityRejection PlayerbotSocialEvaluateOpportunity(Playerbot
      * spiral the cadence exists to remove. A starter subject's own freshness is enforced where the
      * pending contexts age out.
      */
-    if (!opportunity.starter &&
-        (opportunity.nowUnixSeconds < opportunity.threadLastActivityUnixSeconds ||
-         opportunity.nowUnixSeconds - opportunity.threadLastActivityUnixSeconds >
-             PLAYERBOT_SOCIAL_THREAD_STALE_SECONDS))
+    if (!opportunity.starter && (opportunity.nowUnixSeconds < opportunity.threadLastActivityUnixSeconds ||
+                                 opportunity.nowUnixSeconds - opportunity.threadLastActivityUnixSeconds >
+                                     PLAYERBOT_SOCIAL_THREAD_STALE_SECONDS))
         return PlayerbotSocialOpportunityRejection::ThreadStale;
 
     /*
@@ -273,9 +271,8 @@ PlayerbotSocialOpportunityRejection PlayerbotSocialEvaluateOpportunity(Playerbot
         return PlayerbotSocialOpportunityRejection::DuplicateSuppressed;
 
     // Zero means an unset carrier, and falling back keeps the cap a bound rather than a mute.
-    uint32 const botTurnCap = opportunity.maxConsecutiveBotOnlyTurns == 0
-                                  ? PLAYERBOT_SOCIAL_MAX_CONSECUTIVE_BOT_TURNS
-                                  : opportunity.maxConsecutiveBotOnlyTurns;
+    uint32 const botTurnCap = opportunity.maxConsecutiveBotOnlyTurns == 0 ? PLAYERBOT_SOCIAL_MAX_CONSECUTIVE_BOT_TURNS
+                                                                          : opportunity.maxConsecutiveBotOnlyTurns;
     if (!opportunity.starter && !opportunity.speakerIsHuman && opportunity.consecutiveBotOnlyTurns >= botTurnCap)
         return PlayerbotSocialOpportunityRejection::BotOnlyTurnLimit;
 
@@ -299,10 +296,9 @@ PlayerbotSocialBudgetDecision PlayerbotSocialGovernProviderCall(PlayerbotSocialP
     if (hourlyBudget == 0)
         return PlayerbotSocialBudgetDecision::Admitted;
 
-    double const burst =
-        static_cast<double>(hourlyBudget < PLAYERBOT_SOCIAL_PROVIDER_BURST_DIVISOR
-                                ? 1
-                                : hourlyBudget / PLAYERBOT_SOCIAL_PROVIDER_BURST_DIVISOR);
+    double const burst = static_cast<double>(hourlyBudget < PLAYERBOT_SOCIAL_PROVIDER_BURST_DIVISOR
+                                                 ? 1
+                                                 : hourlyBudget / PLAYERBOT_SOCIAL_PROVIDER_BURST_DIVISOR);
 
     if (state.tokens < 0.0)
     {
@@ -322,10 +318,10 @@ PlayerbotSocialBudgetDecision PlayerbotSocialGovernProviderCall(PlayerbotSocialP
     state.lastRefillUnixSeconds = nowUnixSeconds;
 
     // A starter stops above the continuation reserve; a continuation may drain the bucket.
-    double const admissionFloor =
-        continuation ? 1.0
-                     : 1.0 + static_cast<double>(static_cast<uint32>(burst) /
-                                                 PLAYERBOT_SOCIAL_BUDGET_CONTINUATION_RESERVE_DIVISOR);
+    double const admissionFloor = continuation
+                                      ? 1.0
+                                      : 1.0 + static_cast<double>(static_cast<uint32>(burst) /
+                                                                  PLAYERBOT_SOCIAL_BUDGET_CONTINUATION_RESERVE_DIVISOR);
 
     if (state.tokens >= admissionFloor)
     {
@@ -384,8 +380,8 @@ float PlayerbotSocialReplyPressure(PlayerbotSocialThreadPressure const& thread, 
     bool const botOnlyThread = thread.relevantHumanMessages == 0;
     bool const carriedBaseUsable = std::isfinite(thread.botOnlyContinuationBase) &&
                                    thread.botOnlyContinuationBase > 0.0f && thread.botOnlyContinuationBase <= 1.0f;
-    float const base = botOnlyThread && carriedBaseUsable ? thread.botOnlyContinuationBase
-                                                          : PLAYERBOT_SOCIAL_REPLY_PRESSURE_BASE;
+    float const base =
+        botOnlyThread && carriedBaseUsable ? thread.botOnlyContinuationBase : PLAYERBOT_SOCIAL_REPLY_PRESSURE_BASE;
     float const participation = base + HumanParticipationBonus(thread.relevantHumanMessages);
 
     /*
@@ -419,8 +415,7 @@ float PlayerbotSocialStarterPressure(PlayerbotSocialThreadPressure const& thread
      * bot conversation poison the next conversation.
      */
     uint64 const idleSeconds = ElapsedSeconds(thread.nowUnixSeconds, thread.lastActivityUnixSeconds);
-    float const throttled = PLAYERBOT_SOCIAL_STARTER_FULL_PRESSURE *
-                            AmbientFill(idleSeconds, ambientCadenceSeconds) *
+    float const throttled = PLAYERBOT_SOCIAL_STARTER_FULL_PRESSURE * AmbientFill(idleSeconds, ambientCadenceSeconds) *
                             (1.0f - PLAYERBOT_SOCIAL_STARTER_DENSITY_THROTTLE * ClampDensity(thread.channelDensity));
 
     return BoundPressure(ScaleByDensityProfile(throttled, densityProfileMultiplier),

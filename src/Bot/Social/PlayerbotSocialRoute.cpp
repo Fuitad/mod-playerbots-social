@@ -1536,8 +1536,7 @@ bool PlayerbotSocialQueueStarterSource(PlayerbotAI* sourceAI, PlayerbotSocialSta
         for (auto const& channelEntry : channelMgr->GetChannels())
         {
             Channel* const joined = channelEntry.second;
-            if (joined != nullptr && joined->GetChannelId() == ChatChannelId::GENERAL &&
-                candidate->IsInChannel(joined))
+            if (joined != nullptr && joined->GetChannelId() == ChatChannelId::GENERAL && candidate->IsInChannel(joined))
                 return true;
         }
 
@@ -1907,8 +1906,7 @@ void PlayerbotSocialPumpWhisperStarters()
 
     for (PlayerbotSocialWarmRelationship const& pair : warm)
     {
-        Player* const bot =
-            ObjectAccessor::FindPlayer(ObjectGuid::Create<HighGuid::Player>(pair.key.botGuidCounter));
+        Player* const bot = ObjectAccessor::FindPlayer(ObjectGuid::Create<HighGuid::Player>(pair.key.botGuidCounter));
         if (bot == nullptr || !bot->IsInWorld() || bot->InBattleground())
             continue;
 

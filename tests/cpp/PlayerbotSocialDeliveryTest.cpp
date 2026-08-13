@@ -1136,8 +1136,8 @@ TEST(PlayerbotSocialDeliveryTest, TwoSpeakersMayExchangeTheSameContributionFunct
     PlayerbotSocialDeliveryRejection rejection = PlayerbotSocialDeliveryRejection::None;
     uint64 const answerToken = coordinator.BeginSocialRequest(
         501, StoredPersonality(), 0, fixture.channel, fixture.thread.publicId,
-        PlayerbotSocialRequestPriority::DirectHumanEngagement, 1000, REQUEST_ZONE_ID, std::string(), rejection, {},
-        900, true, fixture.currentLine, false, PlayerbotRoleplayPromptMode::Ordinary, fixture.grounding, false);
+        PlayerbotSocialRequestPriority::DirectHumanEngagement, 1000, REQUEST_ZONE_ID, std::string(), rejection, {}, 900,
+        true, fixture.currentLine, false, PlayerbotRoleplayPromptMode::Ordinary, fixture.grounding, false);
     ASSERT_NE(answerToken, 0u);
     PlayerbotSocialProviderResult answer = Message("Could have gone worse.", fixture.channel);
     answer.requestToken = answerToken;
@@ -1147,8 +1147,8 @@ TEST(PlayerbotSocialDeliveryTest, TwoSpeakersMayExchangeTheSameContributionFunct
     // The same bot repeating its own function on the next generated line is still refused.
     uint64 const repeatToken = coordinator.BeginSocialRequest(
         501, StoredPersonality(), 0, fixture.channel, fixture.thread.publicId,
-        PlayerbotSocialRequestPriority::DirectHumanEngagement, 1000, REQUEST_ZONE_ID, std::string(), rejection, {},
-        900, true, fixture.currentLine, false, PlayerbotRoleplayPromptMode::Ordinary, fixture.grounding, false);
+        PlayerbotSocialRequestPriority::DirectHumanEngagement, 1000, REQUEST_ZONE_ID, std::string(), rejection, {}, 900,
+        true, fixture.currentLine, false, PlayerbotRoleplayPromptMode::Ordinary, fixture.grounding, false);
     ASSERT_NE(repeatToken, 0u);
     PlayerbotSocialProviderResult repeat = Message("Anyone need water?", fixture.channel);
     repeat.requestToken = repeatToken;
@@ -1726,8 +1726,8 @@ TEST(PlayerbotSocialDeliveryTest, APublicReplyKeepsTheSpeakerAsContextWithoutMak
     PlayerbotSocialDeliveryRejection rejection = PlayerbotSocialDeliveryRejection::None;
     uint64 const token = coordinator.BeginSocialRequest(
         500, StoredPersonality(), 0, PlayerbotSocialChannel::General, fixture.thread.publicId,
-        PlayerbotSocialRequestPriority::DirectHumanEngagement, 1000, REQUEST_ZONE_ID, std::string(), rejection, {},
-        900, true, fixture.currentLine, false, PlayerbotRoleplayPromptMode::Ordinary, fixture.grounding);
+        PlayerbotSocialRequestPriority::DirectHumanEngagement, 1000, REQUEST_ZONE_ID, std::string(), rejection, {}, 900,
+        true, fixture.currentLine, false, PlayerbotRoleplayPromptMode::Ordinary, fixture.grounding);
     ASSERT_NE(token, 0u);
 
     /*
@@ -1765,8 +1765,8 @@ TEST(PlayerbotSocialDeliveryTest, ASayReplyRevalidatesAgainstTheSpeakerItAnswers
     PlayerbotSocialDeliveryRejection rejection = PlayerbotSocialDeliveryRejection::None;
     uint64 const token = coordinator.BeginSocialRequest(
         500, StoredPersonality(), 0, PlayerbotSocialChannel::Say, fixture.thread.publicId,
-        PlayerbotSocialRequestPriority::DirectHumanEngagement, 1000, REQUEST_ZONE_ID, std::string(), rejection, {},
-        900, true, fixture.currentLine, false, PlayerbotRoleplayPromptMode::Ordinary, fixture.grounding);
+        PlayerbotSocialRequestPriority::DirectHumanEngagement, 1000, REQUEST_ZONE_ID, std::string(), rejection, {}, 900,
+        true, fixture.currentLine, false, PlayerbotRoleplayPromptMode::Ordinary, fixture.grounding);
     ASSERT_NE(token, 0u);
 
     ASSERT_EQ(provider.submittedTargets.size(), 1u);

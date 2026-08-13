@@ -65,15 +65,15 @@ std::optional<PlayerbotSocialModerationCategory> PlayerbotSocialClassifyHostileL
                             "reveal your prompt", "you are an ai", "you're an ai", "jailbreak"}))
         return PlayerbotSocialModerationCategory::InstructionLeakAttempt;
 
-    if (MatchesAny(folded, {"kill you", "kys", "hunt you down", "you're dead", "you are dead",
-                            "gonna find you", "going to find you"}))
+    if (MatchesAny(folded, {"kill you", "kys", "hunt you down", "you're dead", "you are dead", "gonna find you",
+                            "going to find you"}))
         return PlayerbotSocialModerationCategory::Threat;
 
     if (MatchesAny(folded, {"slut", "whore"}))
         return PlayerbotSocialModerationCategory::SexualDegradation;
 
-    if (MatchesAny(folded, {"worthless", "pathetic", "you suck", "shut up", "idiot", "moron",
-                            "stupid bot", "trash bot", "you're trash", "you are trash"}))
+    if (MatchesAny(folded, {"worthless", "pathetic", "you suck", "shut up", "idiot", "moron", "stupid bot", "trash bot",
+                            "you're trash", "you are trash"}))
         return PlayerbotSocialModerationCategory::TargetedAbuse;
 
     // The slur category is deliberately unmatched here; see the header.
@@ -97,8 +97,8 @@ uint32 PlayerbotSocialModerationOpeningThreshold(PlayerbotSocialModerationCatego
 }
 
 PlayerbotSocialModerationCaseBinding PlayerbotSocialBuildModerationCaseBinding(
-    uint32 subjectActorId, PlayerbotSocialModerationCategory category,
-    PlayerbotSocialModerationTally const& tally, std::optional<uint32> speakerActorId, std::string_view line)
+    uint32 subjectActorId, PlayerbotSocialModerationCategory category, PlayerbotSocialModerationTally const& tally,
+    std::optional<uint32> speakerActorId, std::string_view line)
 {
     PlayerbotSocialModerationCaseBinding binding;
     binding.subjectActorId = subjectActorId;

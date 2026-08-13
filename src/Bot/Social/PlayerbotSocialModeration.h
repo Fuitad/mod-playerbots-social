@@ -81,7 +81,7 @@ struct PlayerbotSocialModerationCaseBinding
 };
 
 [[nodiscard]] PlayerbotSocialModerationCaseBinding PlayerbotSocialBuildModerationCaseBinding(
-    uint32 subjectActorId, PlayerbotSocialModerationCategory category,
-    PlayerbotSocialModerationTally const& tally, std::optional<uint32> speakerActorId, std::string_view line);
+    uint32 subjectActorId, PlayerbotSocialModerationCategory category, PlayerbotSocialModerationTally const& tally,
+    std::optional<uint32> speakerActorId, std::string_view line);
 
 #endif

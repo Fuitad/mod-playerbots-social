@@ -220,8 +220,7 @@ struct PlayerbotSocialStarterAudience
 };
 
 [[nodiscard]] bool PlayerbotSocialSelectStarterChannel(PlayerbotSocialStarterAudience const& audience,
-                                                       PlayerbotSocialChannel& channel,
-                                                       bool allowBotAudiences = false);
+                                                       PlayerbotSocialChannel& channel, bool allowBotAudiences = false);
 
 struct PlayerbotSocialStarterContext
 {
@@ -1953,8 +1952,7 @@ private:
 
     // Hostile-line tallies per (abused bot, category). Transient and evicting like the whisper
     // stamps: losing one costs a campaign a fresh count, never a durable record.
-    std::map<std::pair<uint64, PlayerbotSocialModerationCategory>, PlayerbotSocialModerationTally>
-        _moderationTallies;
+    std::map<std::pair<uint64, PlayerbotSocialModerationCategory>, PlayerbotSocialModerationTally> _moderationTallies;
 
     /*
      * One classified hostile line aimed at a bot. Tallies it, and at the category's opening
@@ -1962,8 +1960,7 @@ private:
      * the bot the line was aimed at; the speaker is who said it.
      */
     void NoteHostileLine(uint64 subjectGuidCounter, uint64 speakerGuidCounter,
-                         PlayerbotSocialModerationCategory category, std::string const& text,
-                         uint64 nowUnixSeconds);
+                         PlayerbotSocialModerationCategory category, std::string const& text, uint64 nowUnixSeconds);
 
     /*
      * When each pair's opposition was last answered, so a fight costs the attacker once rather than

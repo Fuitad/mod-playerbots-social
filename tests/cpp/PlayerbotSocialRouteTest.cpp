@@ -151,8 +151,7 @@ TEST(PlayerbotSocialRolloutStageTest, MissingAndInvalidConfigurationResolveToHum
     EXPECT_EQ(PlayerbotSocialParseRolloutStage("bounded_continuation"),
               PlayerbotSocialRolloutStage::BoundedContinuation);
     EXPECT_EQ(PlayerbotSocialParseRolloutStage("autonomous_society"), PlayerbotSocialRolloutStage::AutonomousSociety);
-    EXPECT_STREQ(PlayerbotSocialRolloutStageName(PlayerbotSocialRolloutStage::AutonomousSociety),
-                 "autonomous_society");
+    EXPECT_STREQ(PlayerbotSocialRolloutStageName(PlayerbotSocialRolloutStage::AutonomousSociety), "autonomous_society");
 }
 
 TEST(PlayerbotSocialRolloutStageTest, LaterBehaviorCannotLeakIntoAnEarlierStage)
@@ -578,8 +577,8 @@ TEST_F(PlayerbotSocialFunctionalTrafficTest, RealCommandResolutionAppliesOnlyToC
     for (ChatChannelSource source : {ChatChannelSource::SRC_PARTY, ChatChannelSource::SRC_WHISPER})
         EXPECT_TRUE(PlayerbotSocialIsFunctionalTraffic(_botAI, source, false, "maintenance"));
 
-    EXPECT_FALSE(PlayerbotSocialIsFunctionalTraffic(_botAI, ChatChannelSource::SRC_WHISPER, false,
-                                                     "What are you doing?"));
+    EXPECT_FALSE(
+        PlayerbotSocialIsFunctionalTraffic(_botAI, ChatChannelSource::SRC_WHISPER, false, "What are you doing?"));
     EXPECT_FALSE(PlayerbotSocialIsFunctionalTraffic(_botAI, ChatChannelSource::SRC_SAY, false, "maintenance"));
     EXPECT_FALSE(PlayerbotSocialIsFunctionalTraffic(_botAI, ChatChannelSource::SRC_WHISPER, true, "maintenance"));
 }
