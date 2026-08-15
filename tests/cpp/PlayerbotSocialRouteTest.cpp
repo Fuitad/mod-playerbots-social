@@ -788,6 +788,7 @@ PlayerbotSocialCapturedMessage GeneralCapture()
     captured.speakerGuidCounter = 4001;
     captured.speakerIsHuman = true;
     captured.zoneId = 12;
+    captured.speakerZoneId = 12;
     captured.languageId = 7;
     captured.atUnixSeconds = 1000;
     return captured;
@@ -874,6 +875,27 @@ TEST(PlayerbotSocialCaptureTest, AZoneScopedMessageWithoutAZoneIsRefused)
     EXPECT_EQ(PlayerbotSocialValidateCapture(say), PlayerbotSocialCaptureRejection::MissingZone);
 }
 
+TEST(PlayerbotSocialCaptureTest, AGeneralMessageHeardFromOutsideTheSpeakersZoneIsRefused)
+{
+    // A bot whose channel membership went stale across a zone change still "hears" the remote
+    // zone's General. Filing it would open a thread in the listener's own zone on a conversation
+    // nobody standing there can see.
+    PlayerbotSocialCapturedMessage captured = GeneralCapture();
+    captured.zoneId = 141;
+    EXPECT_EQ(PlayerbotSocialValidateCapture(captured), PlayerbotSocialCaptureRejection::OutsideSpeakerZone);
+
+    // A capture that never learned the speaker's zone fails closed rather than open.
+    PlayerbotSocialCapturedMessage unknownSpeakerZone = GeneralCapture();
+    unknownSpeakerZone.speakerZoneId = 0;
+    EXPECT_EQ(PlayerbotSocialValidateCapture(unknownSpeakerZone), PlayerbotSocialCaptureRejection::OutsideSpeakerZone);
+
+    // Say locality is the hearing-range check, not the zone: a say heard across a zone border is
+    // legitimate and stays accepted.
+    PlayerbotSocialCapturedMessage say = SayCapture();
+    say.zoneId = 141;
+    EXPECT_EQ(PlayerbotSocialValidateCapture(say), PlayerbotSocialCaptureRejection::None);
+}
+
 TEST(PlayerbotSocialCaptureTest, ASayMessageWithoutAHearingCohortIsRefused)
 {
     PlayerbotSocialCapturedMessage say = SayCapture();
@@ -949,6 +971,7 @@ TEST(PlayerbotSocialCaptureTest, EachRejectionReportsItsOwnName)
                               {PlayerbotSocialCaptureRejection::SpeakerIsTarget, "speaker_is_target"},
                               {PlayerbotSocialCaptureRejection::OutOfHearingRange, "out_of_hearing_range"},
                               {PlayerbotSocialCaptureRejection::MissingSayCohort, "missing_say_cohort"},
+                              {PlayerbotSocialCaptureRejection::OutsideSpeakerZone, "outside_speaker_zone"},
                               {PlayerbotSocialCaptureRejection::IdentifierOutOfRange, "identifier_out_of_range"}};
 
     static_assert(std::size(CASES) == PLAYERBOT_SOCIAL_CAPTURE_REJECTION_COUNT,

@@ -236,8 +236,16 @@ struct PlayerbotSocialCapturedMessage
     // The party the message was said in. Set for party, zero everywhere else.
     uint32 groupId = 0;
 
-    // The zone the message was said in. Set for General and Say, zero everywhere else.
+    // The listening bot's zone at capture, which becomes the thread scope. Set for General and
+    // Say, zero everywhere else.
     uint32 zoneId = 0;
+
+    /*
+     * The zone the speaker said the line in. Set for General, whose conversation is scoped to the
+     * speaker's zone: a bot whose channel membership has gone stale across a zone change would
+     * otherwise file a conversation it cannot see into a thread of its own zone. Zero elsewhere.
+     */
+    uint32 speakerZoneId = 0;
 
     // Process local identity of the exact characters who could hear this Say dispatch.
     uint64 sayCohortScopeId = 0;
@@ -275,6 +283,13 @@ enum class PlayerbotSocialCaptureRejection : uint8
     MissingSayCohort,
 
     /*
+     * A General message heard from outside the zone it was said in. Channel membership alone is
+     * not zone-accurate for playerbots, so a listener standing in another zone is refused rather
+     * than allowed to open that zone's thread on a conversation nobody there can see.
+     */
+    OutsideSpeakerZone,
+
+    /*
      * A character identifier too wide to be one. A whisper scope carries both of its characters
      * exactly (see below), which holds only while each identifier is the 32 bit counter the core
      * actually issues. A wider value is refused rather than folded down, because folding is what
@@ -283,7 +298,7 @@ enum class PlayerbotSocialCaptureRejection : uint8
     IdentifierOutOfRange
 };
 
-inline constexpr std::size_t PLAYERBOT_SOCIAL_CAPTURE_REJECTION_COUNT = 11;
+inline constexpr std::size_t PLAYERBOT_SOCIAL_CAPTURE_REJECTION_COUNT = 12;
 
 [[nodiscard]] char const* PlayerbotSocialCaptureRejectionName(PlayerbotSocialCaptureRejection rejection);
 

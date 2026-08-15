@@ -526,6 +526,8 @@ char const* PlayerbotSocialCaptureRejectionName(PlayerbotSocialCaptureRejection 
             return "out_of_hearing_range";
         case PlayerbotSocialCaptureRejection::MissingSayCohort:
             return "missing_say_cohort";
+        case PlayerbotSocialCaptureRejection::OutsideSpeakerZone:
+            return "outside_speaker_zone";
         case PlayerbotSocialCaptureRejection::IdentifierOutOfRange:
             return "identifier_out_of_range";
     }
@@ -556,6 +558,14 @@ PlayerbotSocialCaptureRejection PlayerbotSocialValidateCapture(PlayerbotSocialCa
                 return PlayerbotSocialCaptureRejection::UnexpectedTarget;
             if (captured.zoneId == 0)
                 return PlayerbotSocialCaptureRejection::MissingZone;
+
+            /*
+             * The conversation belongs to the zone it was said in. Channel membership alone is not
+             * zone-accurate for playerbots, so a listener standing elsewhere is refused here rather
+             * than allowed to open its own zone's thread on a conversation nobody there can see.
+             */
+            if (captured.speakerZoneId != captured.zoneId)
+                return PlayerbotSocialCaptureRejection::OutsideSpeakerZone;
             break;
         case PlayerbotSocialChannel::Say:
             if (captured.targetGuidCounter != 0)
@@ -2185,6 +2195,7 @@ bool PlayerbotSocialCaptureChat(PlayerbotAI* botAI, PlayerbotSocialInboundDecisi
     {
         case PlayerbotSocialChannel::General:
             captured.zoneId = bot->GetZoneId();
+            captured.speakerZoneId = speaker->GetZoneId();
             break;
         case PlayerbotSocialChannel::Say:
             captured.zoneId = bot->GetZoneId();

@@ -289,8 +289,14 @@ public:
                                                       static_cast<uint64>(std::time(nullptr)), &eventPublicId,
                                                       &replyToEventPublicId, &sourceEventPublicId);
         PlayerbotSocialDispatchScope const dispatch;
+        /*
+         * Membership AND zone, the same pair every other General audience scan here uses. Playerbot
+         * channel membership goes stale across zone changes, so membership alone admitted listeners
+         * standing in dozens of other zones and fanned one message out into a thread per zone.
+         */
         for (auto const& [guid, listener] : ObjectAccessor::GetPlayers())
-            if (IsSocialBotListener(listener) && listener->IsInChannel(channel))
+            if (IsSocialBotListener(listener) && listener->IsInChannel(channel) && player != nullptr &&
+                listener->GetZoneId() == player->GetZoneId())
                 CaptureSocialListener(GET_PLAYERBOT_AI(listener), player, type, language, message, channel->GetName(),
                                       delivered, eventPublicId, gate, 0, replyToEventPublicId, sourceEventPublicId);
         return true;
