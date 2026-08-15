@@ -704,9 +704,17 @@ PlayerbotSocialDeliveryRejection PlayerbotSocialValidateGroundedProposal(
         result.contribution == PlayerbotSocialContributionFunction::Gesture)
         return PlayerbotSocialDeliveryRejection::None;
 
-    bool const isAnswer = result.contribution == PlayerbotSocialContributionFunction::Answer;
-    if ((expectsAnswer && !isAnswer && result.contribution != PlayerbotSocialContributionFunction::SpecificReaction) ||
-        (!expectsAnswer && isAnswer))
+    /*
+     * A question is answered by whatever the model wrote, not by what it labeled the reply. Every
+     * message function still admitted here (answer, specific_reaction, fact_free_banter) is a
+     * conversational response, and the prompt never teaches the model that a question narrows the
+     * label set, so refusing a claim-free banter label suppressed casual replies to casual
+     * questions ("got a minute?") as irrelevant - a human whispering a bot heard silence. The one
+     * label that still cannot fit is an evidence-citing answer to a line that asked nothing:
+     * that is the model volunteering facts nobody requested, which is the shape this gate exists
+     * to refuse.
+     */
+    if (!expectsAnswer && result.contribution == PlayerbotSocialContributionFunction::Answer)
         return PlayerbotSocialDeliveryRejection::IrrelevantContribution;
 
     if ((result.claimSubject == PlayerbotSocialClaimSubject::None) != result.citedEvidenceIds.empty())

@@ -587,6 +587,41 @@ TEST(PlayerbotSocialEligibilityTest, ABotOnlyReplyHonoursTheCarriedShortCooldown
     EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(starter), PlayerbotSocialOpportunityRejection::CooldownActive);
 }
 
+TEST(PlayerbotSocialEligibilityTest, AHumanWhisperReplyIsNotBlockedByTheBotsOwnCooldown)
+{
+    /*
+     * The 45s cooldown stamps on every delivery, including the bot's own relationship check-in
+     * whisper. A human answering that check-in seconds later must be replied to: the bot solicited
+     * the response, so its own initiation cannot be the reason the answer is ignored. Live, four
+     * whisper replies died cooldown_active in one twenty-minute window over exactly this.
+     */
+    PlayerbotSocialOpportunity opportunity = EligibleReplyOpportunity();
+    opportunity.channel = PlayerbotSocialChannel::Whisper;
+    opportunity.botLastSpokeUnixSeconds = 995;
+    opportunity.nowUnixSeconds = 1000;
+    opportunity.threadLastActivityUnixSeconds = 1000;
+
+    EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(opportunity), PlayerbotSocialOpportunityRejection::None);
+
+    // A bot answering another bot's whisper keeps the pacing: only a human's direct engagement
+    // earns the exemption, so bot pairs still space their turns.
+    PlayerbotSocialOpportunity botSpeaker = opportunity;
+    botSpeaker.speakerIsHuman = false;
+    EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(botSpeaker), PlayerbotSocialOpportunityRejection::CooldownActive);
+
+    // A whisper STARTER is the bot initiating, not answering, and keeps the full pacing.
+    PlayerbotSocialOpportunity starter = opportunity;
+    starter.starter = true;
+    starter.relationshipDriven = true;
+    EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(starter), PlayerbotSocialOpportunityRejection::CooldownActive);
+
+    // The exemption is whisper-only: a human speaking in a room does not release a bot that just
+    // spoke there from its pacing.
+    PlayerbotSocialOpportunity publicReply = opportunity;
+    publicReply.channel = PlayerbotSocialChannel::General;
+    EXPECT_EQ(PlayerbotSocialEvaluateOpportunity(publicReply), PlayerbotSocialOpportunityRejection::CooldownActive);
+}
+
 TEST(PlayerbotSocialEligibilityTest, ACooldownIsNotBypassedByAClockThatMovedBackwards)
 {
     // A backwards clock would otherwise read as a very large elapsed time and release every bot at
@@ -907,7 +942,8 @@ TEST(PlayerbotSocialBudgetTest, TheBudgetAdmitsABurstThenRefillsAtTheHourlyRate)
      */
     PlayerbotSocialProviderBudgetState state;
 
-    for (uint64 call = 0; call < 10; ++call)
+    // Budget 120: burst ten, human reserve two. Bot continuations stop above the human reserve.
+    for (uint64 call = 0; call < 8; ++call)
         EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000, 120, /*continuation=*/true),
                   PlayerbotSocialBudgetDecision::Admitted);
 
@@ -916,6 +952,33 @@ TEST(PlayerbotSocialBudgetTest, TheBudgetAdmitsABurstThenRefillsAtTheHourlyRate)
     // Thirty seconds refills exactly one token at 120 per hour.
     EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1030, 120, true), PlayerbotSocialBudgetDecision::Admitted);
     EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1030, 120, true), PlayerbotSocialBudgetDecision::Refused);
+}
+
+TEST(PlayerbotSocialBudgetTest, HumanEngagementDrawsTheProtectedReserve)
+{
+    /*
+     * Observed live: ambient bot continuations legally drained the bucket to its floor, so a
+     * human's whispered reply raced 160 bots for every refilled token and lost as often as not -
+     * Deszy answered a bot's question and the answer died budget_exhausted. The lane types have
+     * promised this reserve all along ("only work a human is actively waiting on may draw from
+     * the protected reserve"); the bucket just never implemented it. Bot chatter now stops above
+     * the human reserve, and only a human-engagement request may drain the true bottom.
+     */
+    PlayerbotSocialProviderBudgetState state;
+
+    // Bot continuations take the bucket from ten down to the human reserve, and no further.
+    for (uint64 call = 0; call < 8; ++call)
+        EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000, 120, /*continuation=*/true),
+                  PlayerbotSocialBudgetDecision::Admitted);
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000, 120, true), PlayerbotSocialBudgetDecision::Refused);
+
+    // The reserved bottom still answers a human, and only a human.
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000, 120, true, false, /*humanEngagement=*/true),
+              PlayerbotSocialBudgetDecision::Admitted);
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000, 120, true, false, true),
+              PlayerbotSocialBudgetDecision::Admitted);
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 1000, 120, true, false, true),
+              PlayerbotSocialBudgetDecision::Refused);
 }
 
 TEST(PlayerbotSocialBudgetTest, StartersCannotDrainTheContinuationReserve)
@@ -928,17 +991,21 @@ TEST(PlayerbotSocialBudgetTest, StartersCannotDrainTheContinuationReserve)
      */
     PlayerbotSocialProviderBudgetState state;
 
-    // Budget 120: burst ten, reserve two. Starters take the bucket from ten down to the reserve.
-    for (uint64 call = 0; call < 8; ++call)
+    // Budget 120: burst ten, human reserve two, continuation reserve two. Starters stop above both.
+    for (uint64 call = 0; call < 6; ++call)
         EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 2000, 120, /*continuation=*/false),
                   PlayerbotSocialBudgetDecision::Admitted);
 
     EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 2000, 120, false), PlayerbotSocialBudgetDecision::Refused);
 
-    // The reserve still carries continuations, and only continuations.
+    // The continuation reserve still carries continuations, and only continuations.
     EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 2000, 120, true), PlayerbotSocialBudgetDecision::Admitted);
     EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 2000, 120, true), PlayerbotSocialBudgetDecision::Admitted);
     EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 2000, 120, true), PlayerbotSocialBudgetDecision::Refused);
+
+    // And beneath that, the human reserve still answers a human.
+    EXPECT_EQ(PlayerbotSocialGovernProviderCall(state, 2000, 120, true, false, /*humanEngagement=*/true),
+              PlayerbotSocialBudgetDecision::Admitted);
 }
 
 TEST(PlayerbotSocialBudgetTest, OnlyPathologicalOverrunTripsTheCircuit)
@@ -1428,6 +1495,84 @@ TEST(PlayerbotSocialSelectionTest, BeingAddressedByNameOutweighsAHigherBaseDispo
 
     ASSERT_FALSE(selection.responders.empty());
     EXPECT_EQ(selection.responders.front(), 51u);
+}
+
+TEST(PlayerbotSocialSelectionTest, ADirectAddressBypassesThePressureRoll)
+{
+    /*
+     * Pressure paces ambient conversation; it must not gate a message sent TO a bot. A whisper (the
+     * caller sets the input flag: direct by construction) and a line naming a bot both answer
+     * whenever an interested candidate exists, at any pressure and on every seed. Live, a
+     * first-contact whisper lost the ambient roll about half the time and read as a snub.
+     */
+    for (uint64 seed = 0; seed < 200; ++seed)
+    {
+        // The whisper form: the channel itself is the address, no name needed in the text.
+        PlayerbotSocialSelectionInput whisper = SelectionInput({Candidate(61, 80, PlayerbotSocialStance::Receptive)});
+        whisper.replyPressure = 0.05f;
+        whisper.addressedDirectly = true;
+        whisper.selectionSeed = seed;
+        EXPECT_EQ(CountResponder(PlayerbotSocialSelectResponders(whisper), 61), 1u)
+            << "a whispered bot stayed silent on seed " << seed;
+
+        // The named form: the address rides on the candidate, and the flag stays unset.
+        PlayerbotSocialCandidate named = Candidate(62, 80, PlayerbotSocialStance::Receptive);
+        named.addressedByName = true;
+        PlayerbotSocialSelectionInput namedInput = SelectionInput({named});
+        namedInput.replyPressure = 0.05f;
+        namedInput.selectionSeed = seed;
+        EXPECT_EQ(CountResponder(PlayerbotSocialSelectResponders(namedInput), 62), 1u)
+            << "a bot addressed by name stayed silent on seed " << seed;
+    }
+
+    // The bypass is doing the work: the same field without a direct address still declines rolls.
+    std::size_t declined = 0;
+    for (uint64 seed = 0; seed < 200; ++seed)
+    {
+        PlayerbotSocialSelectionInput ambient = SelectionInput({Candidate(63, 80, PlayerbotSocialStance::Receptive)});
+        ambient.replyPressure = 0.05f;
+        ambient.selectionSeed = seed;
+        if (PlayerbotSocialSelectResponders(ambient).responders.empty())
+            ++declined;
+    }
+    EXPECT_GT(declined, 0u) << "ambient pressure stopped gating anything, so the roll itself is broken";
+}
+
+TEST(PlayerbotSocialSelectionTest, TheNamedBotAnswersEvenWhenAnUnnamedRivalOutscoresIt)
+{
+    /*
+     * The named bonus is finite, so an unnamed bot with a high enough disposition can outscore the
+     * addressee. Guaranteeing the roll while letting the rival take the reply would keep the named
+     * form of the defect: naming bot A and hearing only bot B is still a snub. The addressee leads
+     * whenever it survives the scoring gates; the rival stays a ranked alternate.
+     */
+    PlayerbotSocialCandidate named = Candidate(71, 20, PlayerbotSocialStance::Receptive);
+    named.addressedByName = true;
+
+    for (uint64 seed = 0; seed < 200; ++seed)
+    {
+        PlayerbotSocialSelectionInput input =
+            SelectionInput({Candidate(72, 90, PlayerbotSocialStance::Engaged), named});
+        input.replyPressure = 0.05f;
+        input.selectionSeed = seed;
+
+        PlayerbotSocialSelection const selection = PlayerbotSocialSelectResponders(input);
+        ASSERT_FALSE(selection.responders.empty()) << "seed " << seed;
+        EXPECT_EQ(selection.responders.front(), 71u) << "the unnamed rival spoke over the addressee on seed " << seed;
+    }
+}
+
+TEST(PlayerbotSocialSelectionTest, ADirectAddressStillRespectsInterestAndStance)
+{
+    // Guaranteed admission is not forced speech: a hostile or uninterested bot still declines in
+    // character, and the human hears silence for a reason telemetry can name.
+    PlayerbotSocialSelectionInput hostile = SelectionInput({Candidate(64, 99, PlayerbotSocialStance::Dismissive)});
+    hostile.addressedDirectly = true;
+    EXPECT_TRUE(PlayerbotSocialSelectResponders(hostile).responders.empty());
+
+    PlayerbotSocialSelectionInput bored = SelectionInput({Candidate(65, 2, PlayerbotSocialStance::Reserved)});
+    bored.addressedDirectly = true;
+    EXPECT_TRUE(PlayerbotSocialSelectResponders(bored).responders.empty());
 }
 
 TEST(PlayerbotSocialSelectionTest, AQuestionCanMakeAnOtherwiseUninterestingLineWorthAnswering)

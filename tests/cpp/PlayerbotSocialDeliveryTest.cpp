@@ -354,6 +354,17 @@ TEST(PlayerbotSocialGroundedProposalTest, ContributionMustFitTheCurrentConversat
         PlayerbotSocialValidateGroundedProposal(proposal, grounding, Grounding(), PlayerbotSocialChannel::Say, false),
         PlayerbotSocialDeliveryRejection::None);
 
+    /*
+     * A question is answered by whatever the model wrote, not by what it labeled the reply. The
+     * label gate suppressed a claim-free greeting reply to "got a minute?" as irrelevant because
+     * the model called it banter rather than specific_reaction, a taxonomy the prompt never
+     * explains; a human whispering a casual question heard silence. Only the reverse stays
+     * refused: an evidence-citing answer to a line that asked nothing.
+     */
+    EXPECT_EQ(
+        PlayerbotSocialValidateGroundedProposal(proposal, grounding, Grounding(), PlayerbotSocialChannel::Say, true),
+        PlayerbotSocialDeliveryRejection::None);
+
     proposal.claimSubject = PlayerbotSocialClaimSubject::CandidateBot;
     EXPECT_EQ(
         PlayerbotSocialValidateGroundedProposal(proposal, grounding, Grounding(), PlayerbotSocialChannel::Say, false),
@@ -1992,6 +2003,11 @@ TEST(PlayerbotSocialDeliveryTest, ReplyPressureIsAppliedExactlyOncePerOpportunit
 
         PlayerbotSocialActivation activation = LiveOpportunity(coordinator, 1000);
         activation.selectionSeed = seed;
+
+        // The measured property is the AMBIENT answer rate. The shared fixture marks its candidate
+        // as addressed by name, and a direct address now legitimately skips the roll entirely,
+        // which would read here as an answer rate of one rather than of the pressure.
+        activation.candidates.front().addressedByName = false;
 
         PlayerbotSocialActivationResult const result =
             coordinator.Activate(activation, PlayerbotSocialDensityProfile::Normal);

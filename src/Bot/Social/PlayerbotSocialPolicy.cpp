@@ -263,8 +263,19 @@ PlayerbotSocialOpportunityRejection PlayerbotSocialEvaluateOpportunity(Playerbot
     uint64 const replyCooldownSeconds = !opportunity.starter && opportunity.replyCooldownSeconds != 0
                                             ? opportunity.replyCooldownSeconds
                                             : PLAYERBOT_SOCIAL_REPLY_COOLDOWN_SECONDS;
-    if (opportunity.nowUnixSeconds < opportunity.botLastSpokeUnixSeconds ||
-        opportunity.nowUnixSeconds - opportunity.botLastSpokeUnixSeconds < replyCooldownSeconds)
+
+    /*
+     * A human whisper reply is exempt from the bot's own cooldown. The cooldown paces a bot's
+     * output; a whispered answer is paced by the human, who only receives a line for each line they
+     * sent. Without the exemption the bot's own relationship check-in stamps the cooldown, and the
+     * human's answer seconds later is refused: the bot solicits a response it then ignores. Bot
+     * speakers keep the pacing (the autonomous stage carries its own short cooldown for those), and
+     * a whisper starter is the bot initiating, which is exactly what the pacing exists to space.
+     */
+    bool const humanWhisperReply =
+        !opportunity.starter && opportunity.speakerIsHuman && opportunity.channel == PlayerbotSocialChannel::Whisper;
+    if (!humanWhisperReply && (opportunity.nowUnixSeconds < opportunity.botLastSpokeUnixSeconds ||
+                               opportunity.nowUnixSeconds - opportunity.botLastSpokeUnixSeconds < replyCooldownSeconds))
         return PlayerbotSocialOpportunityRejection::CooldownActive;
 
     if (opportunity.duplicateOfRecentMessage)
@@ -281,7 +292,8 @@ PlayerbotSocialOpportunityRejection PlayerbotSocialEvaluateOpportunity(Playerbot
 
 PlayerbotSocialBudgetDecision PlayerbotSocialGovernProviderCall(PlayerbotSocialProviderBudgetState& state,
                                                                 uint64 nowUnixSeconds, uint32 hourlyBudget,
-                                                                bool continuation, bool circuitOpen)
+                                                                bool continuation, bool circuitOpen,
+                                                                bool humanEngagement)
 {
     /*
      * The open circuit outranks everything, the bucket and the no-ceiling escape hatch alike. It
@@ -317,11 +329,20 @@ PlayerbotSocialBudgetDecision PlayerbotSocialGovernProviderCall(PlayerbotSocialP
     }
     state.lastRefillUnixSeconds = nowUnixSeconds;
 
-    // A starter stops above the continuation reserve; a continuation may drain the bucket.
-    double const admissionFloor = continuation
-                                      ? 1.0
-                                      : 1.0 + static_cast<double>(static_cast<uint32>(burst) /
-                                                                  PLAYERBOT_SOCIAL_BUDGET_CONTINUATION_RESERVE_DIVISOR);
+    /*
+     * Three floors, one per stratum, each reserving the band beneath it for the stratum above:
+     * human engagement drains the true bottom, a bot continuation stops above the human reserve,
+     * and a starter stops above both. Under saturation the bucket idles at the bot-continuation
+     * floor, so the human band refills within a minute of quiet and a person's reply never races
+     * ambient chatter for its token.
+     */
+    double const humanReserve =
+        static_cast<double>(static_cast<uint32>(burst) / PLAYERBOT_SOCIAL_BUDGET_HUMAN_RESERVE_DIVISOR);
+    double const continuationReserve =
+        static_cast<double>(static_cast<uint32>(burst) / PLAYERBOT_SOCIAL_BUDGET_CONTINUATION_RESERVE_DIVISOR);
+    double const admissionFloor = humanEngagement ? 1.0
+                                  : continuation  ? 1.0 + humanReserve
+                                                  : 1.0 + humanReserve + continuationReserve;
 
     if (state.tokens >= admissionFloor)
     {
@@ -633,6 +654,17 @@ PlayerbotSocialSelection PlayerbotSocialSelectResponders(PlayerbotSocialSelectio
                   return left.tiebreak > right.tiebreak;
               });
 
+    /*
+     * The addressee leads. The named bonus is finite, so an unnamed bot with a high enough
+     * disposition can outscore the bot the line actually named, and answering the address with the
+     * WRONG voice is the same snub as silence. The highest-scoring named candidate (first in sorted
+     * order) is promoted; everyone else keeps their ranking, so the rival stays the top alternate.
+     */
+    auto const named =
+        std::find_if(scored.begin(), scored.end(), [](ScoredCandidate const& entry) { return entry.addressedByName; });
+    if (named != scored.end())
+        std::rotate(scored.begin(), named, named + 1);
+
     for (ScoredCandidate const& entry : scored)
     {
         if (selection.alternates.size() >= PLAYERBOT_SOCIAL_MAX_SELECTION_ALTERNATES)
@@ -649,7 +681,17 @@ PlayerbotSocialSelection PlayerbotSocialSelectResponders(PlayerbotSocialSelectio
     float const pressure = PlayerbotSocialDetail::ClampToRange(
         PlayerbotSocialDetail::NeutralIfNotANumber(input.replyPressure, 0.0f), 0.0f, 1.0f);
 
-    if (SeededRoll(input.selectionSeed, 1) >= pressure)
+    /*
+     * A direct address skips the roll rather than raising the probability: pressure paces ambient
+     * conversation, and a message sent TO a bot (a whisper, or a line naming one) that loses an
+     * ambient roll reads as a snub. The scoring gates above still apply, so a hostile or
+     * uninterested bot declines in character; only the coin flip is removed. The second responder
+     * below keeps its own roll: the address guarantees the addressee answers, not a chorus.
+     */
+    // The promotion above moved any named candidate to the front, so the front carries the address.
+    bool const addressedDirectly = input.addressedDirectly || scored.front().addressedByName;
+
+    if (!addressedDirectly && SeededRoll(input.selectionSeed, 1) >= pressure)
         return selection;
 
     ScoredCandidate const& leader = scored.front();

@@ -3875,11 +3875,11 @@ PlayerbotSocialEncounterSweepResult PlayerbotSocialMgr::CompleteStaleEncounters(
     return result;
 }
 
-bool PlayerbotSocialMgr::AdmitProviderCall(uint64 nowUnixSeconds, bool continuation)
+bool PlayerbotSocialMgr::AdmitProviderCall(uint64 nowUnixSeconds, bool continuation, bool humanEngagement)
 {
     switch (PlayerbotSocialGovernProviderCall(_providerBudget, nowUnixSeconds,
                                               sPlayerbotSocialConfig.socialChatProviderHourlyBudget, continuation,
-                                              _runtimeControl.budgetCircuitOpen))
+                                              _runtimeControl.budgetCircuitOpen, humanEngagement))
     {
         case PlayerbotSocialBudgetDecision::Admitted:
             return true;
@@ -4450,6 +4450,11 @@ PlayerbotSocialActivationResult PlayerbotSocialMgr::Activate(PlayerbotSocialActi
     selection.replyPressure = result.pressure;
     selection.secondResponderAllowed = !activation.starter;
     selection.selectionSeed = activation.selectionSeed;
+
+    // A whisper reply is addressed to this bot by construction (the same rule the per-responder
+    // lane derivation below applies); only activation sees the channel, so it says so here. A line
+    // that merely names a bot already travels per candidate as `addressedByName`.
+    selection.addressedDirectly = !activation.starter && activation.channel == PlayerbotSocialChannel::Whisper;
 
     result.selection = PlayerbotSocialSelectResponders(selection);
 
@@ -5220,7 +5225,12 @@ uint64 PlayerbotSocialMgr::BeginSocialRequest(
      * may draw the reserved bottom of the bucket; a starter (its subject is what marks it) stops
      * above the reserve, so the starter flood can never silence the conversations it opens.
      */
-    if (!AdmitProviderCall(nowUnixSeconds, PlayerbotSocialProviderCallDrawsReserve(channel, starterSubject.empty())))
+    // The human reserve keys on the admission lane the caller already derived: the two lanes a
+    // human is actively waiting on, exactly as PlayerbotSocialLaneMayUseHumanReserve promises.
+    bool const humanEngagement = priority == PlayerbotSocialRequestPriority::DirectHumanEngagement ||
+                                 priority == PlayerbotSocialRequestPriority::MixedThread;
+    if (!AdmitProviderCall(nowUnixSeconds, PlayerbotSocialProviderCallDrawsReserve(channel, starterSubject.empty()),
+                           humanEngagement))
     {
         rejection = PlayerbotSocialDeliveryRejection::BudgetExhausted;
         return 0;

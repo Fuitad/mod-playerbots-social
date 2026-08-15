@@ -1623,7 +1623,7 @@ public:
      * may draw the reserved bottom of the bucket; starters stop above it. World thread only, like
      * every other admission decision here.
      */
-    bool AdmitProviderCall(uint64 nowUnixSeconds, bool continuation = false);
+    bool AdmitProviderCall(uint64 nowUnixSeconds, bool continuation = false, bool humanEngagement = false);
 
     // Opens the durable backstop: flips the runtime control's circuit, persists the circuit columns
     // (and only those), and says so loudly. Idempotent while already open.

@@ -2939,6 +2939,104 @@ TEST(PlayerbotSocialCoordinatorTest, APerceivableStarterCarriesItsAudienceToTheP
     coordinator.SetSocialProvider(nullptr);
 }
 
+TEST(PlayerbotSocialCoordinatorTest, AHumanWhisperReplyNeverDiesToThePressureRoll)
+{
+    /*
+     * A whisper is addressed to one bot by construction, so activation must tell selection so: the
+     * live defect was this exact wire missing, leaving a first-contact whisper competing at ambient
+     * reply pressure and losing the roll about half the time. Every seed must answer, which is only
+     * true when the direct-address bypass travels from the activation into the selection input.
+     */
+    PlayerbotSocialMgr coordinator;
+
+    PlayerbotSocialThreadKey key;
+    key.channel = PlayerbotSocialChannel::Whisper;
+    key.scopeId = 1;
+    PlayerbotSocialThreadHandle const thread = coordinator.Observe(Saying(key, 900, true, 1000, "hey, got a minute?"));
+    ASSERT_TRUE(thread.valid);
+
+    for (uint64 seed = 0; seed < 200; ++seed)
+    {
+        PlayerbotSocialActivation activation;
+        activation.thread = thread;
+        activation.channel = PlayerbotSocialChannel::Whisper;
+        activation.speakerGuidCounter = 900;
+        activation.speakerIsHuman = true;
+        activation.threadLastActivityUnixSeconds = 1000;
+        activation.relevantHumanMessages = 1;
+        activation.nowUnixSeconds = 1000;
+        activation.selectionSeed = seed;
+
+        PlayerbotSocialActivationCandidate candidate;
+        candidate.botGuidCounter = 500;
+        candidate.profileLoadState = PlayerbotSocialProfileLoadState::AbsentUsingBase;
+        candidate.effectiveDisposition = 90;
+        candidate.stance = PlayerbotSocialStance::Engaged;
+        activation.candidates.push_back(std::move(candidate));
+
+        PlayerbotSocialActivationResult const result =
+            coordinator.Activate(activation, PlayerbotSocialDensityProfile::Normal);
+
+        EXPECT_FALSE(result.pressureDeclined) << "the whispered bot lost the ambient roll on seed " << seed;
+        EXPECT_TRUE(result.refusedCandidates.empty()) << "seed " << seed;
+        ASSERT_FALSE(result.selection.responders.empty()) << "seed " << seed;
+        EXPECT_EQ(result.selection.responders.front(), 500u);
+    }
+}
+
+TEST(PlayerbotSocialCoordinatorTest, ABotWhisperReplySkipsTheRollButKeepsItsOwnPacing)
+{
+    /*
+     * The pressure bypass is channel-shaped, not speaker-shaped, ON PURPOSE: a whisper is directed
+     * speech whoever sent it, and the check-in exchange only works when the recipient's answer is
+     * not a coin flip. What still paces bot pairs is the reply cooldown, which the human-only
+     * exemption deliberately does NOT lift for a bot speaker. Both halves are pinned here so a
+     * later change to either cannot silently tighten or loosen bot-to-bot whisper chatter.
+     */
+    PlayerbotSocialMgr coordinator;
+
+    PlayerbotSocialThreadKey key;
+    key.channel = PlayerbotSocialChannel::Whisper;
+    key.scopeId = 2;
+    PlayerbotSocialThreadHandle const thread = coordinator.Observe(Saying(key, 700, false, 1000, "hey, how goes?"));
+    ASSERT_TRUE(thread.valid);
+
+    PlayerbotSocialActivation activation;
+    activation.thread = thread;
+    activation.channel = PlayerbotSocialChannel::Whisper;
+    activation.speakerGuidCounter = 700;
+    activation.speakerIsHuman = false;
+    activation.threadLastActivityUnixSeconds = 1000;
+    activation.relevantHumanMessages = 0;
+    activation.nowUnixSeconds = 1000;
+
+    PlayerbotSocialActivationCandidate candidate;
+    candidate.botGuidCounter = 500;
+    candidate.profileLoadState = PlayerbotSocialProfileLoadState::AbsentUsingBase;
+    candidate.effectiveDisposition = 90;
+    candidate.stance = PlayerbotSocialStance::Engaged;
+    activation.candidates.push_back(candidate);
+
+    for (uint64 seed = 0; seed < 200; ++seed)
+    {
+        activation.selectionSeed = seed;
+        activation.candidates.front().lastSpokeUnixSeconds = 0;
+
+        PlayerbotSocialActivationResult const result =
+            coordinator.Activate(activation, PlayerbotSocialDensityProfile::Normal);
+        EXPECT_FALSE(result.pressureDeclined) << "a whispered bot lost the roll on seed " << seed;
+        ASSERT_FALSE(result.selection.responders.empty()) << "seed " << seed;
+    }
+
+    // The cooldown is what paces the pair: a bot that just spoke stays refused on a bot's whisper.
+    activation.candidates.front().lastSpokeUnixSeconds = 995;
+    activation.selectionSeed = 1;
+    PlayerbotSocialActivationResult const paced =
+        coordinator.Activate(activation, PlayerbotSocialDensityProfile::Normal);
+    ASSERT_FALSE(paced.refusedCandidates.empty());
+    EXPECT_EQ(paced.refusedCandidates.front().second, PlayerbotSocialOpportunityRejection::CooldownActive);
+}
+
 TEST(PlayerbotSocialCoordinatorTest, ARefusedWhisperCheckInDoesNotBurnThePairCooldown)
 {
     /*
@@ -3725,7 +3823,7 @@ struct RoleplayCase
  * database row, not the GUID, is authoritative.
  */
 RoleplayCase RoleplayCaseFor(PlayerbotSocialThreadHandle const& thread, std::string_view line, uint64 now,
-                             PlayerbotRoleplayAffinityBand band, int wantPass = -1)
+                             PlayerbotRoleplayAffinityBand band, int wantPass = -1, uint64 excludeGuid = 0)
 {
     uint8 const affinity = [band, wantPass]()
     {
@@ -3746,6 +3844,11 @@ RoleplayCase RoleplayCaseFor(PlayerbotSocialThreadHandle const& thread, std::str
 
     for (uint64 guid = 500; guid < 5000; ++guid)
     {
+        // Direct address answers on every seed, so the first guid satisfies most searches and two
+        // independent searches collapse onto the same bot; a caller needing a DIFFERENT bot says so.
+        if (guid == excludeGuid)
+            continue;
+
         PlayerbotSocialActivation activation = RoleplayOpportunity(thread, now, line);
         activation.candidates.clear();
         activation.candidates.push_back(RoleplayWillingCandidate(guid, affinity));
@@ -3906,14 +4009,10 @@ TEST(PlayerbotRoleplayDecisionTest, AContinuationAuthorizesOnlyActiveParticipant
 
     // A receptive bot that never joined cannot be authorized by a continuation, however willing.
     coordinator.Observe(Saying(GeneralZone(1), 900, true, 1030, "and on it goes"));
-    RoleplayCase bystander =
-        RoleplayCaseFor(thread, "and on it goes", 1030, PlayerbotRoleplayAffinityBand::Receptive, 1);
+    RoleplayCase const bystander =
+        RoleplayCaseFor(thread, "and on it goes", 1030, PlayerbotRoleplayAffinityBand::Receptive, 1, active.guid);
     ASSERT_NE(bystander.guid, 0u);
-    if (bystander.guid == active.guid)
-    {
-        bystander = RoleplayCaseFor(thread, "and on it goes", 1030, PlayerbotRoleplayAffinityBand::Enthusiast, 1);
-        ASSERT_NE(bystander.guid, 0u);
-    }
+    ASSERT_NE(bystander.guid, active.guid) << "a bystander that IS the participant proves nothing";
 
     EXPECT_EQ(SoleMode(AssessedCycle(coordinator, thread, 1030, "and on it goes", bystander,
                                      PlayerbotRoleplayAssessmentKind::RoleplayContinuation,

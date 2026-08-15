@@ -355,6 +355,16 @@ inline constexpr uint64 PLAYERBOT_SOCIAL_BUDGET_TRIP_MULTIPLE = 20;
  */
 inline constexpr uint32 PLAYERBOT_SOCIAL_BUDGET_CONTINUATION_RESERVE_DIVISOR = 4;
 
+/*
+ * A further quarter of the burst, beneath the continuation reserve, that only human engagement may
+ * draw. The lane types promise it ("only work a human is actively waiting on may draw from the
+ * protected reserve"): without it, ambient bot continuations legally drain the bucket to its
+ * floor and a human's reply races every bot on the server for each refilled token - live, a
+ * human's whispered answer died budget_exhausted while bot small talk kept flowing. Integer
+ * division again, so a degenerate burst reserves nothing.
+ */
+inline constexpr uint32 PLAYERBOT_SOCIAL_BUDGET_HUMAN_RESERVE_DIVISOR = 4;
+
 struct PlayerbotSocialProviderBudgetState
 {
     // Negative means unseeded; the first decision seeds the bucket at its burst capacity.
@@ -375,16 +385,19 @@ enum class PlayerbotSocialBudgetDecision : uint8
 
 /*
  * `continuation` marks a request that answers an existing thread rather than opening a new one;
- * continuations may draw the reserved bottom of the bucket, starters stop above it. `circuitOpen`
- * is the durable budget circuit: while it is open every call is refused before the bucket is
- * touched, so admission honours the same hard stop the pumps and delivery already do, and the
- * refusals never escalate into a second trip.
+ * continuations may draw the reserved continuation band, starters stop above it. `humanEngagement`
+ * marks a request a human is actively waiting on (the DirectHuman and MixedHumanBot lanes): only
+ * it may drain the protected bottom of the bucket, so bot small talk can never spend the token
+ * that would have answered a person. `circuitOpen` is the durable budget circuit: while it is open
+ * every call is refused before the bucket is touched, so admission honours the same hard stop the
+ * pumps and delivery already do, and the refusals never escalate into a second trip.
  */
 [[nodiscard]] PlayerbotSocialBudgetDecision PlayerbotSocialGovernProviderCall(PlayerbotSocialProviderBudgetState& state,
                                                                               uint64 nowUnixSeconds,
                                                                               uint32 hourlyBudget,
                                                                               bool continuation = false,
-                                                                              bool circuitOpen = false);
+                                                                              bool circuitOpen = false,
+                                                                              bool humanEngagement = false);
 
 /*
  * Whether a request may draw the continuation reserve: any reply (its empty starter subject is
@@ -539,6 +552,15 @@ struct PlayerbotSocialSelectionInput
     float replyPressure = 0.0f;
     bool secondResponderAllowed = false;
     uint64 selectionSeed = 0;
+
+    /*
+     * True when the observed line was sent TO a bot rather than into a room: a whisper reply, where
+     * the channel itself is the address. Set by the caller because only it sees the channel; a line
+     * that merely NAMES a bot travels per candidate as `addressedByName` instead. Either form
+     * bypasses the reply-pressure roll: pressure paces ambient conversation, and a message aimed at
+     * a bot that loses an ambient roll reads as a snub, not as pacing.
+     */
+    bool addressedDirectly = false;
 };
 
 struct PlayerbotSocialSelection
