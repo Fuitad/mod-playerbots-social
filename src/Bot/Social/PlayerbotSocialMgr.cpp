@@ -3066,35 +3066,25 @@ void PlayerbotSocialMgr::RecordEvent(PlayerbotSocialEventDraft draft)
     _events.Push(draft);
 }
 
-void PlayerbotSocialMgr::FlushEvents()
+namespace
 {
-    // New events remain in the bounded queue until the world thread applies the callback.
-    if (_eventPersistence.InFlight())
-        return;
-
-    // Nothing waiting and nothing lost. Skipped rather than drained so an idle tick neither allocates
-    // nor burns the sequence reserved for a gap marker that is not needed.
-    if (_events.PendingCount() == 0 && _events.LostSinceLastDrain() == 0 && _eventPersistence.LostRows() == 0)
-        return;
-
-    uint64 const nowUnixSeconds = static_cast<uint64>(time(nullptr));
-    std::vector<PlayerbotSocialEventBinding> drained;
-    if (_events.PendingCount() > 0 || _events.LostSinceLastDrain() > 0)
-    {
-        uint64 const queueGapSequence = _events.LostSinceLastDrain() > 0 ? _nextEventSequence++ : 0;
-        drained = _events.Drain(queueGapSequence, nowUnixSeconds);
-    }
-
-    uint64 const persistenceGapSequence = _eventPersistence.LostRows() > 0 ? _nextEventSequence++ : 0;
-    if (!_eventPersistence.Prepare(drained, persistenceGapSequence, nowUnixSeconds))
-        return;
-
+/*
+ * Binds one drained batch into a transaction, without committing it.
+ *
+ * Free rather than a member so the manager's header does not have to carry the database types, and
+ * shared by both flushes -- the tick's asynchronous one and the shutdown conclusion's synchronous
+ * one -- so the two cannot drift in what a row says. `actorIds` is the manager's own map, read on
+ * the world thread like everything else that touches it.
+ */
+PlayerbotsDatabaseTransaction BuildEventTransaction(std::vector<PlayerbotSocialEventBinding> const& drained,
+                                                    std::map<uint64, uint32> const& actorIds)
+{
     uint32 const retentionHours = sPlayerbotSocialConfig.socialChatTelemetryRetentionHours;
     PlayerbotsDatabaseTransaction transaction = PlayerbotsDatabase.BeginTransaction();
 
     for (PlayerbotSocialEventBinding const& binding : drained)
     {
-        PlayerbotSocialEventRow const row = PlayerbotSocialBuildEventRow(binding, _actorIds, retentionHours);
+        PlayerbotSocialEventRow const row = PlayerbotSocialBuildEventRow(binding, actorIds, retentionHours);
 
         PlayerbotSocialPreparedStatement* statement = NewPlayerbotSocialStatement(PLAYERBOT_SOCIAL_STMT_INS_EVENT);
         statement->SetData(0, binding.publicId);
@@ -3168,9 +3158,71 @@ void PlayerbotSocialMgr::FlushEvents()
         transaction->Append(ConsumePlayerbotSocialSql(statement));
     }
 
+    return transaction;
+}
+}  // namespace
+
+void PlayerbotSocialMgr::FlushEvents()
+{
+    // New events remain in the bounded queue until the world thread applies the callback.
+    if (_eventPersistence.InFlight())
+        return;
+
+    // Nothing waiting and nothing lost. Skipped rather than drained so an idle tick neither allocates
+    // nor burns the sequence reserved for a gap marker that is not needed.
+    if (_events.PendingCount() == 0 && _events.LostSinceLastDrain() == 0 && _eventPersistence.LostRows() == 0)
+        return;
+
+    uint64 const nowUnixSeconds = static_cast<uint64>(time(nullptr));
+    std::vector<PlayerbotSocialEventBinding> drained;
+    if (_events.PendingCount() > 0 || _events.LostSinceLastDrain() > 0)
+    {
+        uint64 const queueGapSequence = _events.LostSinceLastDrain() > 0 ? _nextEventSequence++ : 0;
+        drained = _events.Drain(queueGapSequence, nowUnixSeconds);
+    }
+
+    uint64 const persistenceGapSequence = _eventPersistence.LostRows() > 0 ? _nextEventSequence++ : 0;
+    if (!_eventPersistence.Prepare(drained, persistenceGapSequence, nowUnixSeconds))
+        return;
+
+    PlayerbotsDatabaseTransaction transaction = BuildEventTransaction(drained, _actorIds);
+
     SocialTransactionProcessor()
         .AddCallback(PlayerbotsDatabase.AsyncCommitTransaction(transaction))
         .AfterComplete([this](bool success) { _eventPersistence.Complete(success); });
+}
+
+void PlayerbotSocialMgr::ConcludeAtShutdown()
+{
+    /*
+     * The worldserver fires its shutdown hook AFTER the update loop has returned, so there is no
+     * tick left: a request still pending has already missed every chance it had to be delivered, and
+     * an event still queued has nobody left to drain it.
+     *
+     * Cancellation first, because it is what concludes those requests and gives every held check-in
+     * its window back with `shutting_down` on the record. Then the queue is written synchronously,
+     * since the asynchronous path's completion callback is processed by a tick that will not come.
+     */
+    CancelPendingDeliveries();
+
+    if (_events.PendingCount() == 0 && _events.LostSinceLastDrain() == 0)
+        return;
+
+    uint64 const nowUnixSeconds = static_cast<uint64>(time(nullptr));
+    uint64 const queueGapSequence = _events.LostSinceLastDrain() > 0 ? _nextEventSequence++ : 0;
+    std::vector<PlayerbotSocialEventBinding> const drained = _events.Drain(queueGapSequence, nowUnixSeconds);
+    if (drained.empty())
+        return;
+
+    /*
+     * Straight past the persistence tracker, deliberately. It exists to carry a loss forward into a
+     * LATER batch as a gap marker, and there is no later batch; asking it to prepare would also
+     * refuse outright while an earlier commit is still in flight, which would drop exactly the rows
+     * this call exists to save. Whatever that in-flight commit is carrying was already handed to the
+     * database worker and lands, or does not, on its own.
+     */
+    PlayerbotsDatabaseTransaction transaction = BuildEventTransaction(drained, _actorIds);
+    PlayerbotsDatabase.DirectCommitTransaction(transaction);
 }
 
 namespace
@@ -4007,6 +4059,25 @@ void PlayerbotSocialMgr::NoteHostileLine(uint64 subjectGuidCounter, uint64 speak
     RecordEvent(std::move(draft));
 }
 
+namespace
+{
+/*
+ * Evicts, unlike the assistance ledger, because a whisper stamp is not a bound anyone could farm:
+ * losing one permits at most a single early whisper for that pair or target. The oldest stamp is the
+ * one most likely to have expired anyway.
+ */
+template <class Stamps>
+void EvictOldestStamp(Stamps& stamps)
+{
+    auto oldest = stamps.begin();
+    for (auto it = stamps.begin(); it != stamps.end(); ++it)
+        if (it->second < oldest->second)
+            oldest = it;
+
+    stamps.erase(oldest);
+}
+}  // namespace
+
 bool PlayerbotSocialMgr::NoteWhisperStarterAttempt(PlayerbotSocialRelationshipKey const& key, uint64 nowUnixSeconds,
                                                    uint64 cooldownSeconds, uint64 targetCooldownSeconds)
 {
@@ -4016,6 +4087,21 @@ bool PlayerbotSocialMgr::NoteWhisperStarterAttempt(PlayerbotSocialRelationshipKe
     auto const stamped = _whisperStarterAttempts.find(key);
     if (stamped != _whisperStarterAttempts.end() && ElapsedSeconds(nowUnixSeconds, stamped->second) < cooldownSeconds)
         return false;
+
+    /*
+     * A pair whose last check-in was released rather than spent waits out a short backoff before the
+     * scan considers it again. The scan takes the first eligible warm pair and stops, so without
+     * this a pair that fails on every pass is retried on every pass and the walk never reaches
+     * anybody behind it. Expired here rather than swept, because this is the only reader.
+     */
+    auto const backedOff = _whisperStarterRetryAfter.find(key);
+    if (backedOff != _whisperStarterRetryAfter.end())
+    {
+        if (nowUnixSeconds < backedOff->second)
+            return false;
+
+        _whisperStarterRetryAfter.erase(backedOff);
+    }
 
     /*
      * The pair window rations one bot toward one target and says nothing about how many DIFFERENT
@@ -4032,23 +4118,9 @@ bool PlayerbotSocialMgr::NoteWhisperStarterAttempt(PlayerbotSocialRelationshipKe
         ElapsedSeconds(nowUnixSeconds, targeted->second) < targetCooldownSeconds)
         return false;
 
-    /*
-     * Evicts, unlike the assistance ledger, because a stamp here is not a bound anyone could farm:
-     * losing one permits at most a single early whisper for that pair or target. The oldest stamp is
-     * the one most likely to have expired anyway.
-     */
-    auto const evictOldest = [](auto& stamps)
-    {
-        auto oldest = stamps.begin();
-        for (auto it = stamps.begin(); it != stamps.end(); ++it)
-            if (it->second < oldest->second)
-                oldest = it;
-        stamps.erase(oldest);
-    };
-
     if (stamped == _whisperStarterAttempts.end() &&
         _whisperStarterAttempts.size() >= PLAYERBOT_SOCIAL_MAX_TRACKED_PAIRS)
-        evictOldest(_whisperStarterAttempts);
+        EvictOldestStamp(_whisperStarterAttempts);
 
     _whisperStarterAttempts[key] = nowUnixSeconds;
 
@@ -4056,7 +4128,7 @@ bool PlayerbotSocialMgr::NoteWhisperStarterAttempt(PlayerbotSocialRelationshipKe
     {
         if (targeted == _whisperTargetAttempts.end() &&
             _whisperTargetAttempts.size() >= PLAYERBOT_SOCIAL_MAX_TRACKED_PAIRS)
-            evictOldest(_whisperTargetAttempts);
+            EvictOldestStamp(_whisperTargetAttempts);
 
         _whisperTargetAttempts[key.subjectGuidCounter] = nowUnixSeconds;
     }
@@ -4064,16 +4136,80 @@ bool PlayerbotSocialMgr::NoteWhisperStarterAttempt(PlayerbotSocialRelationshipKe
     return true;
 }
 
-void PlayerbotSocialMgr::ClearWhisperStarterAttempt(PlayerbotSocialRelationshipKey const& key)
+void PlayerbotSocialMgr::ReleaseWhisperStarterAttempt(PlayerbotSocialWhisperStarterCharge const& charge,
+                                                      std::string_view reason, uint64 nowUnixSeconds)
 {
+    PlayerbotSocialRelationshipKey const& key = charge.key;
+    if (key.botGuidCounter == 0 || key.subjectGuidCounter == 0)
+        return;
+
     _whisperStarterAttempts.erase(key);
 
     /*
-     * The target stamp too, and safely: a live one would have refused this pair before it ever
-     * reached the activation that failed, so the only stamp there is the one this same attempt
-     * just wrote. A refused check-in must cost the target's hour no more than it costs the pair's.
+     * What replaces the window: a few minutes, not six hours. The scan stops at the first eligible
+     * warm pair, so a pair handed straight back is the pair the next scan picks again, which on live
+     * pinned the whole feature to one bot for as long as the provider stayed slow.
      */
-    _whisperTargetAttempts.erase(key.subjectGuidCounter);
+    if (_whisperStarterRetryAfter.find(key) == _whisperStarterRetryAfter.end() &&
+        _whisperStarterRetryAfter.size() >= PLAYERBOT_SOCIAL_MAX_TRACKED_PAIRS)
+        EvictOldestStamp(_whisperStarterRetryAfter);
+
+    _whisperStarterRetryAfter[key] = nowUnixSeconds + PLAYERBOT_SOCIAL_WHISPER_RETRY_BACKOFF_SECONDS;
+
+    /*
+     * The target stamp too, but ONLY while it is still the one this attempt wrote. A check-in nobody
+     * received must cost the target's hour no more than it costs the pair's, and it must not cost
+     * anybody ELSE their hour: the target window is shared across every bot warm to that person, and
+     * `PlayerbotsSocial.Whisper.TargetCooldownSeconds` has no floor, so a realm running it shorter
+     * than the provider timeout can let this attempt's reservation expire and a second pair take the
+     * same person before this release ever arrives. Erasing that newer stamp would hand the next
+     * warm bot a free pass through the flood cap, at exactly the moment a slow provider has a queue
+     * of them waiting.
+     */
+    auto const targeted = _whisperTargetAttempts.find(key.subjectGuidCounter);
+    if (targeted != _whisperTargetAttempts.end() && targeted->second == charge.stampedAtUnixSeconds)
+        _whisperTargetAttempts.erase(targeted);
+
+    /*
+     * The window is given back in silence otherwise, and a six-hour window given back for the wrong
+     * reason looks exactly like one given back for the right one. Naming it is what makes the
+     * check-in lane countable: attempted, delivered, and released with a cause for the difference.
+     */
+    PlayerbotSocialEventDraft draft;
+    draft.eventType = std::string(PLAYERBOT_SOCIAL_EVENT_TYPE_CHECKIN_RELEASE);
+    draft.origin = PlayerbotSocialEventOrigin::System;
+    draft.outcome = PlayerbotSocialEventOutcome::Suppressed;
+    draft.channel = PlayerbotSocialChannel::Whisper;
+    draft.hasChannel = true;
+    draft.botGuidCounter = key.botGuidCounter;
+    draft.targetGuidCounter = key.subjectGuidCounter;
+    draft.reason = std::string(reason);
+    draft.occurredAtUnixSeconds = nowUnixSeconds;
+    RecordEvent(std::move(draft));
+}
+
+void PlayerbotSocialMgr::HoldWhisperStarterCharge(uint64 requestToken, PlayerbotSocialRelationshipKey const& key,
+                                                  uint64 stampedAtUnixSeconds)
+{
+    if (requestToken == 0 || key.botGuidCounter == 0 || key.subjectGuidCounter == 0)
+        return;
+
+    _whisperStarterCharges[requestToken] = PlayerbotSocialWhisperStarterCharge{key, stampedAtUnixSeconds};
+}
+
+void PlayerbotSocialMgr::SettleWhisperStarterCharge(uint64 requestToken) { _whisperStarterCharges.erase(requestToken); }
+
+void PlayerbotSocialMgr::ReleaseWhisperStarterCharge(uint64 requestToken, std::string_view reason,
+                                                     uint64 nowUnixSeconds)
+{
+    auto const held = _whisperStarterCharges.find(requestToken);
+    if (held == _whisperStarterCharges.end())
+        return;
+
+    PlayerbotSocialWhisperStarterCharge const charge = held->second;
+    _whisperStarterCharges.erase(held);
+
+    ReleaseWhisperStarterAttempt(charge, reason, nowUnixSeconds);
 }
 
 PlayerbotSocialRelationshipValues PlayerbotSocialMgr::ApplyRelationshipDelta(
@@ -5562,6 +5698,12 @@ PlayerbotSocialDeliveryRejection PlayerbotSocialMgr::AcceptSocialResult(Playerbo
     attempt.threadPublicId = pending->second.threadPublicId;
     attempt.zoneId = pending->second.zoneId;
     attempt.occurredAtUnixSeconds = static_cast<uint64>(time(nullptr));
+
+    // The caller's own clock, in seconds, for anything that has to line up with the scan that opened
+    // the request. `time(nullptr)` above reads the same wall clock in production, but only the
+    // argument is authoritative: a check-in's hold and its retry backoff must not be measured on a
+    // clock the caller never handed in.
+    uint64 const concludedAtUnixSeconds = nowUnixMilliseconds / 1000;
     attempt.operatorEvidence = pending->second.operatorEvidence;
     bool const retainTelemetry = !pending->second.statelessDirectReply;
 
@@ -5580,6 +5722,9 @@ PlayerbotSocialDeliveryRejection PlayerbotSocialMgr::AcceptSocialResult(Playerbo
         attempt.rejection = shape;
         if (retainTelemetry)
             RecordEvent(PlayerbotSocialMakeProviderAttemptEvent(attempt));
+
+        ReleaseWhisperStarterCharge(attempt.requestToken, PlayerbotSocialDeliveryRejectionName(shape),
+                                    concludedAtUnixSeconds);
 
         return shape;
     }
@@ -5600,6 +5745,11 @@ PlayerbotSocialDeliveryRejection PlayerbotSocialMgr::AcceptSocialResult(Playerbo
         attempt.outcome = PlayerbotSocialProviderAttemptOutcome::Silent;
         if (retainTelemetry)
             RecordEvent(PlayerbotSocialMakeProviderAttemptEvent(attempt));
+
+        // Silence is a legitimate answer, and it is still nothing the target received: a check-in
+        // the provider declined to write costs the pair no more than one it never answered.
+        ReleaseWhisperStarterCharge(attempt.requestToken, PLAYERBOT_SOCIAL_REASON_PROVIDER_SILENCE,
+                                    concludedAtUnixSeconds);
 
         return PlayerbotSocialDeliveryRejection::None;
     }
@@ -5739,9 +5889,19 @@ PlayerbotSocialDeliveryRejection PlayerbotSocialMgr::CompleteDelivery(
         }
     }
 
+    uint64 const concludedAtUnixSeconds = static_cast<uint64>(time(nullptr));
+
     if (verdict != PlayerbotSocialDeliveryRejection::None && !pending->second.statelessDirectReply)
-        RecordEvent(
-            PlayerbotSocialMakeDeliverySuppressionEvent(pending->second, verdict, static_cast<uint64>(time(nullptr))));
+        RecordEvent(PlayerbotSocialMakeDeliverySuppressionEvent(pending->second, verdict, concludedAtUnixSeconds));
+
+    /*
+     * A refused line was never heard, so the pair's window goes back with the reason it was refused.
+     * Clearing revalidation does NOT settle the hold: the delivery pump can still fail the send, and
+     * only the seam that actually spoke knows which happened.
+     */
+    if (verdict != PlayerbotSocialDeliveryRejection::None)
+        ReleaseWhisperStarterCharge(requestToken, PlayerbotSocialDeliveryRejectionName(verdict),
+                                    concludedAtUnixSeconds);
 
     /*
      * Consumed either way. A result is delivered once or not at all: leaving a refused one in place
@@ -5794,6 +5954,14 @@ std::vector<PlayerbotSocialAbandonedRequest> PlayerbotSocialMgr::ExpireTimedOutR
 
                 expired.push_back({pending->second.requestToken, pending->second.botGuidCounter,
                                    PlayerbotSocialDeliveryRejection::ProviderTimedOut});
+
+                // The commonest way a check-in ends with nobody hearing it, and the one that cost a
+                // pair six hours of silence for the longest: the hold goes back before the entry does.
+                ReleaseWhisperStarterCharge(
+                    pending->second.requestToken,
+                    PlayerbotSocialDeliveryRejectionName(PlayerbotSocialDeliveryRejection::ProviderTimedOut),
+                    nowUnixSeconds);
+
                 pending = bot->second.erase(pending);
                 continue;
             }
@@ -5818,6 +5986,19 @@ std::vector<PlayerbotSocialAbandonedRequest> PlayerbotSocialMgr::CancelPendingDe
         for (auto const& [token, pending] : requests)
         {
             cancelled.push_back({token, botGuidCounter, PlayerbotSocialDeliveryRejection::ShuttingDown});
+
+            /*
+             * Before the `resultArrived` skip below, because a check-in waiting out its delay is
+             * just as unheard at cancellation as one still waiting on its provider.
+             *
+             * Reaches nobody today: cancellation has no production caller (see the comment below),
+             * and at a real shutdown the windows die with the process anyway. It is here so that
+             * whoever gives cancellation a caller inherits the same rule as every other conclusion,
+             * rather than one path that quietly keeps its holds.
+             */
+            ReleaseWhisperStarterCharge(
+                token, PlayerbotSocialDeliveryRejectionName(PlayerbotSocialDeliveryRejection::ShuttingDown),
+                nowUnixSeconds);
 
             /*
              * ONLY a request still waiting on its provider. An entry whose result already arrived is

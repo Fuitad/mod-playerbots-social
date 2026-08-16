@@ -3043,9 +3043,13 @@ TEST(PlayerbotSocialCoordinatorTest, ARefusedWhisperCheckInDoesNotBurnThePairCoo
     /*
      * The pump stamps the pair BEFORE activating (so cheap refusals stay cheap), and both live
      * whisper attempts died on the budget with the stamp already written, silencing each warm
-     * pair for six hours over a refusal that the very next 30-second scan could have retried.
-     * Clearing the stamp when no request opened is what makes the stamp mean "a whisper
-     * happened" rather than "a whisper was considered".
+     * pair for six hours over a refusal that a later scan could have retried. Releasing the stamp
+     * when no request opened is what makes the stamp mean "a whisper happened" rather than "a
+     * whisper was considered".
+     *
+     * What a released pair keeps is a short backoff, not a window. The scan takes the FIRST
+     * eligible warm pair and stops, so a pair handed straight back is the pair the next scan picks
+     * again: on live that pinned the feature to a single bot within six minutes.
      */
     PlayerbotSocialMgr coordinator;
     PlayerbotSocialRelationshipKey const key{500, 900};
@@ -3053,14 +3057,19 @@ TEST(PlayerbotSocialCoordinatorTest, ARefusedWhisperCheckInDoesNotBurnThePairCoo
     ASSERT_TRUE(coordinator.NoteWhisperStarterAttempt(key, 1000, 21600, 3600));
     EXPECT_FALSE(coordinator.NoteWhisperStarterAttempt(key, 1030, 21600, 3600)) << "the stamp itself must hold";
 
-    coordinator.ClearWhisperStarterAttempt(key);
-    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt(key, 1030, 21600, 3600))
-        << "a cleared pair may retry on the next scan";
+    coordinator.ReleaseWhisperStarterAttempt({key, 1000}, "not_opened", 1030);
+    EXPECT_FALSE(coordinator.NoteWhisperStarterAttempt(key, 1060, 21600, 3600))
+        << "a released pair waits its backoff so the scan reaches the pairs behind it";
+    EXPECT_TRUE(
+        coordinator.NoteWhisperStarterAttempt(key, 1030 + PLAYERBOT_SOCIAL_WHISPER_RETRY_BACKOFF_SECONDS, 21600, 3600))
+        << "and retries minutes later rather than six hours later";
 
-    // And the target's window was released with it, so the retry is not refused on the way past the
-    // second gate either, nor is the next warm bot to reach that person.
-    coordinator.ClearWhisperStarterAttempt(key);
-    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt({501, 900}, 1060, 21600, 3600))
+    // The target's window goes back with the release, so the next warm bot to reach that person is
+    // not held off by a check-in nobody received. The retry above re-stamped the target, so the
+    // release that gives it up has to name that stamp rather than the first one.
+    uint64 const retriedAt = 1030 + PLAYERBOT_SOCIAL_WHISPER_RETRY_BACKOFF_SECONDS;
+    coordinator.ReleaseWhisperStarterAttempt({key, retriedAt}, "not_opened", retriedAt);
+    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt({501, 900}, retriedAt + 30, 21600, 3600))
         << "a refused check-in must not spend the target's window";
 }
 

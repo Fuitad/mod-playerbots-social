@@ -331,7 +331,16 @@ public:
         PlayerbotSocialDeliverDue();
     }
 
-    void OnShutdown() override { SetPlayerbotSocialControlAcceptingRequests(false); }
+    /*
+     * Fired after the world update loop has returned, so this is the last code that runs while the
+     * databases are still up. Nothing else will tick: every request still outstanding is already
+     * undeliverable, and the telemetry queue has no drain left. The coordinator concludes both.
+     */
+    void OnShutdown() override
+    {
+        SetPlayerbotSocialControlAcceptingRequests(false);
+        sPlayerbotSocialMgr.ConcludeAtShutdown();
+    }
 };
 }  // namespace
 

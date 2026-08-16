@@ -2003,7 +2003,13 @@ void PlayerbotSocialPumpWhisperStarters()
 
         PlayerbotSocialThreadHandle const thread = sPlayerbotSocialMgr.OpenStarterThread(key, nowUnixSeconds);
         if (!thread.valid)
+        {
+            // Stamped a moment ago and spent on nothing: the thread registry was at capacity or
+            // refused the scope, which the next scan may well get past.
+            sPlayerbotSocialMgr.ReleaseWhisperStarterAttempt({pair.key, nowUnixSeconds}, "thread_unavailable",
+                                                             nowUnixSeconds);
             continue;
+        }
 
         std::string const starterSubject = "checking in on " + target->GetName();
 
@@ -2013,7 +2019,13 @@ void PlayerbotSocialPumpWhisperStarters()
         std::optional<PlayerbotPersonalityProfile> const personality =
             sPlayerbotPersonalityMgr.GetOrCreate(pair.key.botGuidCounter);
         if (!personality.has_value())
+        {
+            // A bot with no personality yet cannot speak in one, and the profile store fills in
+            // asynchronously: this pair is worth retrying, not silencing for six hours.
+            sPlayerbotSocialMgr.ReleaseWhisperStarterAttempt({pair.key, nowUnixSeconds}, "personality_unavailable",
+                                                             nowUnixSeconds);
             continue;
+        }
         candidate.personality = *personality;
 
         // Scored against the relationship itself: the warmth that justified the whisper is the
@@ -2084,9 +2096,30 @@ void PlayerbotSocialPumpWhisperStarters()
          * means "a whisper happened", and a budget refusal at 30-second scan cadence is exactly
          * what the next scan should retry. Both live whisper attempts died this way, silencing
          * each warm pair for six hours over a refusal.
+         *
+         * A request that DID open keeps the window held rather than charged. It is spent only where
+         * the line is actually spoken, and given back by whichever conclusion the request reaches
+         * instead: an unanswered provider, a malformed or silent answer, a delivery the world
+         * refuses. The activation opens at most one request here, because there is one candidate.
          */
         if (result.openedTokens.empty())
-            sPlayerbotSocialMgr.ClearWhisperStarterAttempt(pair.key);
+        {
+            std::string_view reason = "not_opened";
+            if (!result.refusedRequests.empty())
+                reason = PlayerbotSocialDeliveryRejectionName(result.refusedRequests.front().second);
+            else if (result.rejection != PlayerbotSocialOpportunityRejection::None)
+                reason = PlayerbotSocialOpportunityRejectionName(result.rejection);
+            else if (!result.refusedCandidates.empty())
+                reason = PlayerbotSocialOpportunityRejectionName(result.refusedCandidates.front().second);
+            else if (result.pressureDeclined)
+                reason = PLAYERBOT_SOCIAL_REASON_PRESSURE_DECLINED;
+
+            sPlayerbotSocialMgr.ReleaseWhisperStarterAttempt({pair.key, nowUnixSeconds}, reason, nowUnixSeconds);
+        }
+        else
+        {
+            sPlayerbotSocialMgr.HoldWhisperStarterCharge(result.openedTokens.front(), pair.key, nowUnixSeconds);
+        }
 
         // One check-in per scan, server-wide. Occasional is the contract, and the per-pair cooldown
         // above makes the next scan pick a different pair rather than this one again.
@@ -2184,11 +2217,20 @@ void PlayerbotSocialDeliverDue()
              */
             LOG_DEBUG("playerbots", "Social delivery {} for bot {} was revalidated but the send failed on channel {}",
                       token, pending.botGuidCounter, static_cast<uint32>(pending.channel));
+
+            // A check-in the world refused at the last step is one nobody received, so the pair's
+            // window goes back here exactly as it does for every earlier refusal.
+            sPlayerbotSocialMgr.ReleaseWhisperStarterCharge(token, PLAYERBOT_SOCIAL_REASON_SEND_REFUSED,
+                                                            nowUnixSeconds);
             continue;
         }
 
         // Recorded only on a send the world accepted, so a refusal cannot start a speech cooldown.
         PlayerbotSocialRememberSpoke(pending.botGuidCounter, nowUnixSeconds);
+
+        // The one place a check-in is charged. Everything before this point is a hold, because the
+        // pair only owes its six hours of quiet once the line has actually travelled.
+        sPlayerbotSocialMgr.SettleWhisperStarterCharge(token);
     }
 }
 

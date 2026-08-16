@@ -548,6 +548,50 @@ inline constexpr std::string_view PLAYERBOT_SOCIAL_EVENT_TYPE_OBSERVATION = "soc
 inline constexpr std::string_view PLAYERBOT_SOCIAL_REASON_PRESSURE_DECLINED = "pressure_declined";
 
 /*
+ * A relationship check-in that ended without reaching anybody, and the reason it did.
+ *
+ * The pair window it gives back is six hours wide, so its absence is the loudest silence this module
+ * can produce and the one least visible in the feed: a pair that rests is indistinguishable from a
+ * pair nothing ever chose. This is the row that tells them apart.
+ */
+inline constexpr std::string_view PLAYERBOT_SOCIAL_EVENT_TYPE_CHECKIN_RELEASE = "social.checkin.release";
+
+// A line the coordinator cleared and the world then refused to send: not in the channel, no group,
+// a whisper target that logged out between the revalidation and the packet.
+inline constexpr std::string_view PLAYERBOT_SOCIAL_REASON_SEND_REFUSED = "send_refused";
+
+/*
+ * How long a released pair waits before the scan may consider it again.
+ *
+ * Giving a window back is what stops a failed check-in costing six hours, and it also removes the
+ * only thing that used to make the pump move on: the scan takes the first eligible warm pair and
+ * stops there, so a pair released on every scan is a pair retried on every scan and nobody behind it
+ * is ever reached. Live proved that within six minutes, with the walk collapsing from 63 pairs an
+ * hour across 41 bots to one bot alternating between two targets while the provider was slow.
+ *
+ * Ten scans wide. Long enough for the walk to reach the pairs behind a failing one, short enough
+ * that a transient refusal costs minutes rather than a window.
+ */
+inline constexpr uint64 PLAYERBOT_SOCIAL_WHISPER_RETRY_BACKOFF_SECONDS = 300;
+
+/*
+ * One check-in's claim on a pair's window, and on its target's.
+ *
+ * The stamp value travels with the claim because a release can arrive long after the attempt, and
+ * the target's window is shared: `PlayerbotsSocial.Whisper.TargetCooldownSeconds` is an operator
+ * setting with no floor, so a realm may run it shorter than the provider timeout. Then one pair's
+ * reservation can expire, a second pair can reserve the same person, and the first pair's timeout
+ * arrives holding nothing. Releasing on the stamp it wrote is what stops it taking back a window
+ * that now belongs to somebody else, which would be a burst of check-ins at exactly the moment the
+ * provider is degraded.
+ */
+struct PlayerbotSocialWhisperStarterCharge
+{
+    PlayerbotSocialRelationshipKey key;
+    uint64 stampedAtUnixSeconds = 0;
+};
+
+/*
  * Silence, named.
  *
  * The delivery vocabulary reports a deliberately silent provider as `None`, because silence is an
@@ -1195,6 +1239,18 @@ public:
      */
     void UpdateDatabaseWork(uint32 diff);
 
+    /*
+     * Concludes every outstanding request and writes the backlog synchronously, because nothing will
+     * tick again.
+     *
+     * The worldserver fires its shutdown hook AFTER the update loop has returned, so
+     * `UpdateDatabaseWork` will not run once more: a pending request has already missed its last
+     * chance to be delivered, and a queued event has nobody left to drain it. Without this, every
+     * check-in still holding a pair's window ended with no record naming why, which is the one
+     * terminal path the release rule could not otherwise reach.
+     */
+    void ConcludeAtShutdown();
+
     // The administrative controls in force -----------------------------------------------------
 
     /*
@@ -1642,11 +1698,48 @@ public:
                                    uint64 cooldownSeconds, uint64 targetCooldownSeconds);
 
     /*
-     * Un-stamps a pair and its target when the check-in never opened a request (a budget refusal, a
-     * full queue), so the next scan retries instead of the pair resting its whole cooldown over
-     * nothing. A stamp must mean "a whisper happened", never "a whisper was considered".
+     * Un-stamps a pair and its target, and says why in the feed.
+     *
+     * The stamp NoteWhisperStarterAttempt writes is a hold, not a charge. It is taken before the
+     * attempt so a second scan cannot open the same pair while one is in flight, and only a line the
+     * target actually receives is worth six hours of silence. Every path that ends a check-in
+     * without delivering comes through here, so a rested pair can be counted and explained rather
+     * than inferred from a gap.
+     *
+     * The target's window goes back with it, but only when the stamp there is still the one this
+     * attempt wrote: the target window is shared across every bot warm to that person, and it can be
+     * configured shorter than a request takes to conclude. Taking back somebody else's reservation
+     * would let the next warm bot straight past the flood cap.
+     *
+     * What the pair keeps is a short retry backoff, so the scan walks on to the pairs behind it
+     * instead of retrying this one every thirty seconds. That is flow control, not a charge.
      */
-    void ClearWhisperStarterAttempt(PlayerbotSocialRelationshipKey const& key);
+    void ReleaseWhisperStarterAttempt(PlayerbotSocialWhisperStarterCharge const& charge, std::string_view reason,
+                                      uint64 nowUnixSeconds);
+
+    /*
+     * Binds an opened check-in request to the pair holding a window for it.
+     *
+     * A request concludes long after the scan that opened it, and most of the ways it can conclude
+     * deliver nothing: the provider never answers, the answer is malformed or silent, the world
+     * refuses the line at delivery. Each of those knows a token and nothing about relationships,
+     * so the token is what the hold is found back by.
+     */
+    void HoldWhisperStarterCharge(uint64 requestToken, PlayerbotSocialRelationshipKey const& key,
+                                  uint64 stampedAtUnixSeconds);
+
+    /*
+     * Spends the hold: the check-in reached its target, and the pair rests its full window.
+     *
+     * Called from the delivery seam rather than from the coordinator, because clearing revalidation
+     * is not the same as being heard. The world can still refuse the send afterwards, and a line
+     * nobody received must not cost six hours.
+     */
+    void SettleWhisperStarterCharge(uint64 requestToken);
+
+    // Gives the hold back with a reason. A no-op for a token holding none, so every terminal path
+    // may call it without asking whether this request was a check-in.
+    void ReleaseWhisperStarterCharge(uint64 requestToken, std::string_view reason, uint64 nowUnixSeconds);
 
     PlayerbotSocialRelationshipValues ApplyRelationshipDelta(uint64 botGuidCounter, uint64 subjectGuidCounter,
                                                              PlayerbotSocialRelationshipValues const& delta,
@@ -1953,6 +2046,20 @@ private:
     // The same, per target rather than per pair, so no one person collects every warm bot's check-in
     // at once. Only targets carrying a window are stamped, which in production is the humans.
     std::map<uint64, uint64> _whisperTargetAttempts;
+
+    /*
+     * The pair each in-flight check-in request is holding a window for.
+     *
+     * One entry per outstanding check-in, and the pump opens at most one per thirty-second scan, so
+     * this is a handful of entries at worst. Every path that ends a pending delivery either settles
+     * or releases the hold, and request tokens are issued monotonically and never reused, so an
+     * entry cannot be matched by a later request even if one were ever left behind.
+     */
+    std::map<uint64, PlayerbotSocialWhisperStarterCharge> _whisperStarterCharges;
+
+    // When a released pair may be scanned again. Transient and evicting like the stamps above:
+    // losing one costs a failing pair an early retry, never a window anybody is owed.
+    std::map<PlayerbotSocialRelationshipKey, uint64> _whisperStarterRetryAfter;
 
     // The sliding-window provider budget ledger AdmitProviderCall rules from.
     PlayerbotSocialProviderBudgetState _providerBudget;

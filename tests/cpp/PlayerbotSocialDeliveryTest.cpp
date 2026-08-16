@@ -1448,6 +1448,281 @@ TEST(PlayerbotSocialDeliveryTest, ADeliveredResultIsAlsoConsumed)
     EXPECT_EQ(coordinator.PendingDeliveryCount(), 0u);
 }
 
+namespace
+{
+// The check-in release rows one lifecycle produced, in the order they were recorded.
+std::vector<PlayerbotSocialEventBinding> CheckInReleases(PlayerbotSocialMgr const& coordinator)
+{
+    std::vector<PlayerbotSocialEventBinding> releases;
+    for (PlayerbotSocialEventBinding const& event : coordinator.PendingEvents())
+        if (event.eventType == PLAYERBOT_SOCIAL_EVENT_TYPE_CHECKIN_RELEASE)
+            releases.push_back(event);
+
+    return releases;
+}
+
+// One whisper check-in, opened exactly as the pump opens it: the pair's window is stamped first, and
+// the request that is supposed to spend it is bound to the pair by its token.
+uint64 OpenHeldCheckIn(PlayerbotSocialMgr& coordinator, PlayerbotSocialRelationshipKey const& key, uint64 now)
+{
+    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt(key, now, 21600, 3600));
+
+    uint64 const token = OpenRequest(coordinator, key.botGuidCounter, PlayerbotSocialChannel::Whisper, now);
+    EXPECT_NE(token, 0u);
+    coordinator.HoldWhisperStarterCharge(token, key, now);
+    return token;
+}
+}  // namespace
+
+TEST(PlayerbotSocialDeliveryTest, ACheckInWhoseProviderNeverAnswersGivesThePairWindowBack)
+{
+    /*
+     * The pair stamp is a hold taken before the attempt, and until now only a request that never
+     * OPENED gave it back. A request that opened and then timed out kept it, so the pair went dark
+     * for six hours and the target for an hour over a check-in nobody received, with no row saying
+     * so: 292 of the 1217 check-ins on live died exactly this way inside one day.
+     */
+    PlayerbotSocialMgr coordinator;
+    RecordingProvider provider;
+    coordinator.SetSocialProvider(&provider);
+
+    PlayerbotSocialRelationshipKey const key{500, 900};
+    ASSERT_NE(OpenHeldCheckIn(coordinator, key, 1000), 0u);
+
+    uint64 const timedOutAt = 1000 + PLAYERBOT_SOCIAL_PROVIDER_TIMEOUT_SECONDS;
+    ASSERT_EQ(coordinator.ExpireTimedOutRequests(timedOutAt).size(), 1u);
+
+    EXPECT_FALSE(coordinator.NoteWhisperStarterAttempt(key, timedOutAt, 21600, 3600))
+        << "a released pair waits its backoff, or the scan retries it every pass and reaches nobody else";
+    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt(key, timedOutAt + PLAYERBOT_SOCIAL_WHISPER_RETRY_BACKOFF_SECONDS,
+                                                      21600, 3600))
+        << "a check-in nobody received must not rest the pair for six hours";
+
+    std::vector<PlayerbotSocialEventBinding> const releases = CheckInReleases(coordinator);
+    ASSERT_EQ(releases.size(), 1u) << "and the release must be countable rather than inferred";
+    EXPECT_EQ(releases.front().reason, "provider_timed_out");
+    EXPECT_EQ(releases.front().botGuidCounter, key.botGuidCounter);
+    EXPECT_EQ(releases.front().targetGuidCounter, key.subjectGuidCounter);
+    EXPECT_EQ(releases.front().channel, "whisper");
+}
+
+TEST(PlayerbotSocialDeliveryTest, ACheckInAnsweredBadlyOrNotAtAllGivesThePairWindowBack)
+{
+    /*
+     * The two conclusions the provider itself reaches. A malformed answer is refused before the
+     * world is consulted and a deliberate silence closes the request as a legitimate answer, and
+     * neither one puts a word in front of the target, so neither is worth six hours.
+     */
+    PlayerbotSocialMgr malformed;
+    RecordingProvider malformedProvider;
+    malformed.SetSocialProvider(&malformedProvider);
+
+    PlayerbotSocialRelationshipKey const shouted{504, 904};
+    uint64 const shoutedToken = OpenHeldCheckIn(malformed, shouted, 1000);
+
+    PlayerbotSocialProviderResult burst = Message("one\ntwo", PlayerbotSocialChannel::Whisper);
+    burst.requestToken = shoutedToken;
+    ASSERT_EQ(malformed.AcceptSocialResult(burst, 100000, 3), PlayerbotSocialDeliveryRejection::BurstDelimiter);
+
+    EXPECT_TRUE(malformed.NoteWhisperStarterAttempt(shouted, 1000 + PLAYERBOT_SOCIAL_WHISPER_RETRY_BACKOFF_SECONDS + 1,
+                                                    21600, 3600));
+    ASSERT_EQ(CheckInReleases(malformed).size(), 1u);
+    EXPECT_EQ(CheckInReleases(malformed).front().reason, "burst_delimiter");
+
+    PlayerbotSocialMgr silent;
+    RecordingProvider silentProvider;
+    silent.SetSocialProvider(&silentProvider);
+
+    PlayerbotSocialRelationshipKey const quiet{505, 905};
+    uint64 const quietToken = OpenHeldCheckIn(silent, quiet, 1000);
+
+    PlayerbotSocialProviderResult nothing;
+    nothing.requestToken = quietToken;
+    nothing.kind = PlayerbotSocialOutputKind::Silence;
+    ASSERT_EQ(silent.AcceptSocialResult(nothing, 100000, 3), PlayerbotSocialDeliveryRejection::None);
+
+    EXPECT_TRUE(silent.NoteWhisperStarterAttempt(quiet, 1000 + PLAYERBOT_SOCIAL_WHISPER_RETRY_BACKOFF_SECONDS + 1,
+                                                 21600, 3600));
+    ASSERT_EQ(CheckInReleases(silent).size(), 1u);
+    EXPECT_EQ(CheckInReleases(silent).front().reason, "provider_silence");
+}
+
+TEST(PlayerbotSocialDeliveryTest, ACheckInCancelledAtShutdownGivesThePairWindowBackWithAReason)
+{
+    /*
+     * The last terminal path, and the one with no tick behind it: the worldserver fires its shutdown
+     * hook after the update loop has already returned, so a check-in still in flight can never be
+     * delivered and never times out either. It concludes here or nowhere.
+     *
+     * A request whose result had already ARRIVED counts too. It was waiting out a conversational
+     * pause, not a provider, and a pause nobody lives to hear the end of delivered nothing.
+     */
+    PlayerbotSocialMgr coordinator;
+    RecordingProvider provider;
+    coordinator.SetSocialProvider(&provider);
+
+    // On the wall clock, because cancellation carries no clock of its own and concludes on
+    // `time(nullptr)`, exactly as its provider-attempt rows always have.
+    PlayerbotSocialRelationshipKey const waiting{509, 907};
+    PlayerbotSocialRelationshipKey const answered{510, 908};
+    uint64 const openedAt = static_cast<uint64>(time(nullptr));
+
+    ASSERT_NE(OpenHeldCheckIn(coordinator, waiting, openedAt), 0u);
+
+    uint64 const answeredToken = OpenHeldCheckIn(coordinator, answered, openedAt);
+    PlayerbotSocialProviderResult ready = Message("still around?", PlayerbotSocialChannel::Whisper);
+    ready.requestToken = answeredToken;
+    ASSERT_EQ(coordinator.AcceptSocialResult(ready, 100000, 3), PlayerbotSocialDeliveryRejection::None);
+
+    ASSERT_EQ(coordinator.CancelPendingDeliveries().size(), 2u);
+
+    uint64 const afterBackoff = openedAt + PLAYERBOT_SOCIAL_WHISPER_RETRY_BACKOFF_SECONDS + 1;
+    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt(waiting, afterBackoff, 21600, 3600));
+    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt(answered, afterBackoff, 21600, 3600))
+        << "a line waiting out its delay when the lights went out was never heard either";
+
+    std::vector<PlayerbotSocialEventBinding> const releases = CheckInReleases(coordinator);
+    ASSERT_EQ(releases.size(), 2u);
+    EXPECT_EQ(releases.front().reason, "shutting_down");
+    EXPECT_EQ(releases.back().reason, "shutting_down");
+}
+
+TEST(PlayerbotSocialDeliveryTest, ALateReleaseDoesNotTakeBackSomebodyElsesTargetWindow)
+{
+    /*
+     * The target window is shared by every bot warm to one person, and
+     * PlayerbotsSocial.Whisper.TargetCooldownSeconds has no floor: a realm may run it shorter than
+     * the thirty seconds a request has to answer in. Then the first pair's reservation expires while
+     * its request is still open, a second pair reserves the same person, and the first pair's
+     * timeout arrives holding nothing. Releasing that newer stamp would walk the next warm bot
+     * straight through the flood cap, and it would happen precisely when a slow provider has a queue
+     * of them waiting.
+     */
+    PlayerbotSocialMgr coordinator;
+    RecordingProvider provider;
+    coordinator.SetSocialProvider(&provider);
+
+    uint64 const shortTargetCooldown = 10;
+    PlayerbotSocialRelationshipKey const first{506, 906};
+    PlayerbotSocialRelationshipKey const second{507, 906};
+
+    ASSERT_TRUE(coordinator.NoteWhisperStarterAttempt(first, 1000, 21600, shortTargetCooldown));
+    uint64 const token = OpenRequest(coordinator, first.botGuidCounter, PlayerbotSocialChannel::Whisper, 1000);
+    ASSERT_NE(token, 0u);
+    coordinator.HoldWhisperStarterCharge(token, first, 1000);
+
+    // The target's short window lapses and a different warm bot takes it, well before the first
+    // request has given up.
+    ASSERT_TRUE(coordinator.NoteWhisperStarterAttempt(second, 1015, 21600, shortTargetCooldown));
+
+    ASSERT_EQ(coordinator.ExpireTimedOutRequests(1000 + PLAYERBOT_SOCIAL_PROVIDER_TIMEOUT_SECONDS).size(), 1u);
+
+    EXPECT_FALSE(coordinator.NoteWhisperStarterAttempt({508, 906}, 1020, 21600, shortTargetCooldown))
+        << "the second pair's reservation must survive the first pair's timeout";
+
+    // And it lapses on its own clock rather than being cut short or extended.
+    EXPECT_TRUE(
+        coordinator.NoteWhisperStarterAttempt({508, 906}, 1015 + shortTargetCooldown, 21600, shortTargetCooldown));
+}
+
+TEST(PlayerbotSocialDeliveryTest, ACheckInRefusedAtDeliveryGivesThePairWindowBack)
+{
+    // The second half of the same defect: the provider answered, the world refused the line, and the
+    // pair paid the full window for a whisper that was never spoken.
+    PlayerbotSocialMgr coordinator;
+    RecordingProvider provider;
+    coordinator.SetSocialProvider(&provider);
+
+    /*
+     * On the wall clock, because CompleteDelivery concludes on `time(nullptr)` as its suppression
+     * event always has. A synthetic stamp here would be ancient by the time the release is read back,
+     * and the retry would pass whether or not the window was ever given up.
+     */
+    PlayerbotSocialRelationshipKey const key{501, 901};
+    uint64 const openedAt = static_cast<uint64>(time(nullptr));
+    uint64 const token = OpenHeldCheckIn(coordinator, key, openedAt);
+
+    PlayerbotSocialProviderResult answer = Message("still around?", PlayerbotSocialChannel::Whisper);
+    answer.requestToken = token;
+    ASSERT_EQ(coordinator.AcceptSocialResult(answer, 100000, 3), PlayerbotSocialDeliveryRejection::None);
+
+    PlayerbotSocialDeliveryConditions moved = AllHold();
+    moved.threadStillCurrent = false;
+    ASSERT_EQ(coordinator.CompleteDelivery(token, moved), PlayerbotSocialDeliveryRejection::SupersededThread);
+
+    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt(
+        key, openedAt + PLAYERBOT_SOCIAL_WHISPER_RETRY_BACKOFF_SECONDS + 1, 21600, 3600))
+        << "still far inside the six-hour window, so only a release can let this through";
+
+    std::vector<PlayerbotSocialEventBinding> const releases = CheckInReleases(coordinator);
+    ASSERT_EQ(releases.size(), 1u);
+    EXPECT_EQ(releases.front().reason, "superseded_thread");
+}
+
+TEST(PlayerbotSocialDeliveryTest, ACheckInClearedForDeliveryKeepsItsHoldUntilTheSendIsAccepted)
+{
+    /*
+     * Revalidation is not the same as being heard: the delivery pump can still fail the send after
+     * the coordinator clears it. So a cleared check-in holds its window, and only the seam that
+     * actually spoke settles it. Releasing here instead would let the pump open the same pair again
+     * on its next scan while the first line was still being sent.
+     */
+    PlayerbotSocialMgr coordinator;
+    RecordingProvider provider;
+    coordinator.SetSocialProvider(&provider);
+
+    PlayerbotSocialRelationshipKey const key{502, 902};
+    uint64 const token = OpenHeldCheckIn(coordinator, key, 1000);
+
+    PlayerbotSocialProviderResult answer = Message("still around?", PlayerbotSocialChannel::Whisper);
+    answer.requestToken = token;
+    ASSERT_EQ(coordinator.AcceptSocialResult(answer, 100000, 3), PlayerbotSocialDeliveryRejection::None);
+    ASSERT_EQ(coordinator.CompleteDelivery(token, AllHold()), PlayerbotSocialDeliveryRejection::None);
+
+    EXPECT_FALSE(coordinator.NoteWhisperStarterAttempt(key, 1030, 21600, 3600))
+        << "a line that is on its way must keep the pair's window";
+    EXPECT_TRUE(CheckInReleases(coordinator).empty());
+
+    // The world refuses the send, so the hold that was never spent goes back with its own reason.
+    coordinator.ReleaseWhisperStarterCharge(token, PLAYERBOT_SOCIAL_REASON_SEND_REFUSED, 1030);
+    EXPECT_TRUE(
+        coordinator.NoteWhisperStarterAttempt(key, 1030 + PLAYERBOT_SOCIAL_WHISPER_RETRY_BACKOFF_SECONDS, 21600, 3600));
+
+    std::vector<PlayerbotSocialEventBinding> const releases = CheckInReleases(coordinator);
+    ASSERT_EQ(releases.size(), 1u);
+    EXPECT_EQ(releases.front().reason, "send_refused");
+}
+
+TEST(PlayerbotSocialDeliveryTest, ASpokenCheckInSpendsThePairWindow)
+{
+    // The one path that charges. Without this the release rule would be free to give every window
+    // back, which is the flood the pair and target windows exist to prevent.
+    PlayerbotSocialMgr coordinator;
+    RecordingProvider provider;
+    coordinator.SetSocialProvider(&provider);
+
+    PlayerbotSocialRelationshipKey const key{503, 903};
+    uint64 const token = OpenHeldCheckIn(coordinator, key, 1000);
+
+    PlayerbotSocialProviderResult answer = Message("still around?", PlayerbotSocialChannel::Whisper);
+    answer.requestToken = token;
+    ASSERT_EQ(coordinator.AcceptSocialResult(answer, 100000, 3), PlayerbotSocialDeliveryRejection::None);
+    ASSERT_EQ(coordinator.CompleteDelivery(token, AllHold()), PlayerbotSocialDeliveryRejection::None);
+
+    coordinator.SettleWhisperStarterCharge(token);
+
+    EXPECT_FALSE(coordinator.NoteWhisperStarterAttempt(key, 1030, 21600, 3600))
+        << "a delivered check-in rests the pair for its whole window";
+    EXPECT_TRUE(CheckInReleases(coordinator).empty());
+
+    EXPECT_FALSE(coordinator.NoteWhisperStarterAttempt(key, 1000 + 21599, 21600, 3600))
+        << "and rests it for the whole six hours, not for a retry backoff";
+
+    // And a settled token is spent: a later conclusion carrying it cannot give the window back.
+    coordinator.ReleaseWhisperStarterCharge(token, PLAYERBOT_SOCIAL_REASON_SEND_REFUSED, 1060);
+    EXPECT_FALSE(coordinator.NoteWhisperStarterAttempt(key, 1060, 21600, 3600));
+}
+
 TEST(PlayerbotSocialDeliveryTest, AProviderThatNeverAnswersIsAbandoned)
 {
     PlayerbotSocialMgr coordinator;
