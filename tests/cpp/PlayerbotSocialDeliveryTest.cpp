@@ -1168,6 +1168,51 @@ TEST(PlayerbotSocialDeliveryTest, TwoSpeakersMayExchangeTheSameContributionFunct
               PlayerbotSocialDeliveryRejection::DuplicateFunction);
 }
 
+TEST(PlayerbotSocialDeliveryTest, AHumanTurnBreaksTheDuplicateFunctionStreak)
+{
+    /*
+     * The duplicate-function rail refuses ONE bot repeating its own function on consecutive
+     * generated lines. A human's answer between the bot's two lines means the conversation moved:
+     * banter answered with banter across a real human turn is an exchange, not a monologue. Only
+     * generated deliveries used to enter the streak, so a whisper conversation with a human
+     * suppressed every second reply as duplicate_function.
+     */
+    PlayerbotSocialDeliveryConditions conditions = AllHold();
+    conditions.currentGrounding = Grounding();
+
+    PlayerbotSocialMgr coordinator;
+    RecordingProvider provider;
+    coordinator.SetSocialProvider(&provider);
+    GroundedThreadFixture const fixture = OpenGroundedThread(coordinator);
+
+    uint64 const firstToken = OpenGroundedRequest(coordinator, fixture);
+    PlayerbotSocialProviderResult first = Message("Still standing.", fixture.channel);
+    first.requestToken = firstToken;
+    ASSERT_EQ(coordinator.AcceptSocialResult(first, 100000, 3), PlayerbotSocialDeliveryRejection::None);
+    ASSERT_EQ(coordinator.CompleteDelivery(firstToken, conditions), PlayerbotSocialDeliveryRejection::None);
+
+    // A human answers in the same thread between the bot's two lines.
+    coordinator.ApplyConsentSnapshot(901, false);
+    PlayerbotSocialObservation humanTurn;
+    humanTurn.key.channel = fixture.channel;
+    humanTurn.key.scopeId = 42;
+    humanTurn.eventPublicId = PlayerbotSocialMakeEventPublicId(5000, 901);
+    humanTurn.speakerGuidCounter = 901;
+    humanTurn.speakerName = "Deszy";
+    humanTurn.speakerIsHuman = true;
+    humanTurn.zoneId = REQUEST_ZONE_ID;
+    humanTurn.atUnixSeconds = 1010;
+    humanTurn.text = "ha, glad you made it.";
+    ASSERT_EQ(coordinator.Observe(humanTurn).publicId, fixture.thread.publicId);
+
+    // The bot answering the human with the same function and different words is a conversation.
+    uint64 const secondToken = OpenGroundedRequest(coordinator, fixture);
+    PlayerbotSocialProviderResult second = Message("Could have gone worse.", fixture.channel);
+    second.requestToken = secondToken;
+    ASSERT_EQ(coordinator.AcceptSocialResult(second, 200000, 3), PlayerbotSocialDeliveryRejection::None);
+    EXPECT_EQ(coordinator.CompleteDelivery(secondToken, conditions), PlayerbotSocialDeliveryRejection::None);
+}
+
 TEST(PlayerbotSocialDeliveryTest, AReplyWhoseExactParentAgedOutIsSuppressedByName)
 {
     PlayerbotSocialMgr coordinator;

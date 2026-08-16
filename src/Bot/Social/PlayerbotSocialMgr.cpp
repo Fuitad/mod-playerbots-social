@@ -522,6 +522,22 @@ PlayerbotSocialThreadHandle PlayerbotSocialMgr::Observe(PlayerbotSocialObservati
         promptLine.text = observation.text;
         chosen->promptContext.Offer(observation.key.channel, std::move(promptLine), speakerConsented,
                                     observation.atUnixSeconds);
+
+        /*
+         * A human's turn breaks the duplicate-function streak. The rail refuses one bot repeating
+         * its own function on consecutive GENERATED lines, but a human answering in between means
+         * the conversation moved, exactly as another bot's line would. Humans have no classified
+         * contribution, so the entry carries None: it can never itself match a generated function,
+         * it only stops the bot's previous entry from being the back of the deque. Generated lines
+         * re-entering through Observe stay out, or a bot's own echo would whitewash its monologue.
+         */
+        if (observation.speakerIsHuman)
+        {
+            chosen->recentContributionFunctions.push_back(
+                {observation.speakerGuidCounter, PlayerbotSocialContributionFunction::None});
+            if (chosen->recentContributionFunctions.size() > PLAYERBOT_SOCIAL_MAX_THREAD_RECENT_LINES)
+                chosen->recentContributionFunctions.pop_front();
+        }
     }
 
     handle.valid = true;
