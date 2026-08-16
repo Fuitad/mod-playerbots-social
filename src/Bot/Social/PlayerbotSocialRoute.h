@@ -659,6 +659,18 @@ struct PlayerbotSocialSpeaker
  */
 bool PlayerbotSocialDeliver(Player* bot, Player* target, PlayerbotSocialDeliveryRequest const& request);
 
+/*
+ * The observation that files a bot's DELIVERED whisper back into its own thread. Every other
+ * surface re-enters conversation through a bot listener's capture hook, but a whisper delivered
+ * to a human has no bot listener, so without this the thread accumulates only the human's half
+ * and the next reply is generated as first contact - live, a bot re-greeted the same player on
+ * every message of a conversation. The whisper scope packs the pair, not the direction, so this
+ * lands in the thread the human's lines opened.
+ */
+[[nodiscard]] PlayerbotSocialObservation PlayerbotSocialDeliveredWhisperObservation(
+    uint64 botGuidCounter, std::string const& botName, uint64 targetGuidCounter,
+    PlayerbotSocialDeliveryRequest const& request, uint64 nowUnixSeconds);
+
 // The two shapes almost every direct producer needs, so a one line send stays a one line send.
 bool PlayerbotSocialSay(Player* bot, std::string const& text, uint32 languageId, PlayerbotSocialEventOrigin origin);
 bool PlayerbotSocialWhisper(Player* bot, std::string const& text, uint32 languageId, Player* target,

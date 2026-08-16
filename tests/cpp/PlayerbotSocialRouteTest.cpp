@@ -1024,6 +1024,55 @@ TEST(PlayerbotSocialScopeTest, SimultaneousSayCohortsInOneZoneNeverShareAThread)
     EXPECT_EQ(secondContext.thread.front(), "Second: second cohort only");
 }
 
+TEST(PlayerbotSocialScopeTest, ADeliveredWhisperToAHumanRejoinsItsOwnThread)
+{
+    /*
+     * A whisper delivered to a human has no bot listener whose capture hook would file it back
+     * into the conversation, so the thread accumulated only the human's half: the model was handed
+     * "Deszy said X, Deszy said Y" with no memory of its own reply between them, and it re-greeted
+     * the same player on every message. The delivered line is observed straight into the pair's
+     * thread, so the next request's context carries both voices in order.
+     */
+    PlayerbotSocialCapturedMessage inbound;
+    inbound.channel = PlayerbotSocialChannel::Whisper;
+    inbound.speakerGuidCounter = 661;
+    inbound.speakerName = "Deszy";
+    inbound.speakerIsHuman = true;
+    inbound.targetGuidCounter = 668;
+    inbound.atUnixSeconds = 1000;
+    inbound.text = "hey, got a minute?";
+    inbound.eventPublicId = PlayerbotSocialMakeEventPublicId(1000, 661);
+
+    PlayerbotSocialMgr coordinator;
+    coordinator.ApplyConsentSnapshot(661, false);
+    PlayerbotSocialThreadHandle const thread = coordinator.Observe(PlayerbotSocialObservationFor(inbound));
+    ASSERT_TRUE(thread.valid);
+
+    // The reply travels the delivery seam: guids arrive in the OPPOSITE direction and must land in
+    // the same pair thread, as a generated reply and not as a human line.
+    PlayerbotSocialDeliveryRequest reply;
+    reply.channel = PlayerbotSocialChannel::Whisper;
+    reply.origin = PlayerbotSocialEventOrigin::Social;
+    reply.text = "sure, what's up?";
+    reply.eventPublicId = PlayerbotSocialMakeEventPublicId(1005, 668);
+    reply.replyToEventPublicId = inbound.eventPublicId;
+
+    PlayerbotSocialObservation const delivered =
+        PlayerbotSocialDeliveredWhisperObservation(668, "Alisaie", 661, reply, 1005);
+    EXPECT_EQ(delivered.key.channel, PlayerbotSocialChannel::Whisper);
+    EXPECT_FALSE(delivered.speakerIsHuman);
+    EXPECT_EQ(delivered.role, PlayerbotSocialPromptLineRole::GeneratedReply);
+
+    PlayerbotSocialThreadHandle const continuation = coordinator.Observe(delivered);
+    ASSERT_TRUE(continuation.valid);
+    EXPECT_EQ(continuation.threadId, thread.threadId) << "the delivered reply opened a thread of its own";
+
+    PlayerbotSocialRequestContext const context = coordinator.ComposeRequestContext(
+        668, StoredPersonality(), 661, PlayerbotSocialChannel::Whisper, "", 1010, thread.publicId);
+    EXPECT_EQ(context.thread, (std::vector<std::string>{"Deszy: hey, got a minute?", "Alisaie: sure, what's up?"}))
+        << "the bot's own turn must sit in the transcript between the human's lines";
+}
+
 TEST(PlayerbotSocialScopeTest, HearingCohortsAreCanonicalAndExpireWithConversationState)
 {
     PlayerbotSocialSayCohortRegistry registry;

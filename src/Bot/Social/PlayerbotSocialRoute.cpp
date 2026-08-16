@@ -719,6 +719,31 @@ PlayerbotSocialObservation PlayerbotSocialObservationFor(PlayerbotSocialCaptured
     return observation;
 }
 
+PlayerbotSocialObservation PlayerbotSocialDeliveredWhisperObservation(uint64 botGuidCounter, std::string const& botName,
+                                                                      uint64 targetGuidCounter,
+                                                                      PlayerbotSocialDeliveryRequest const& request,
+                                                                      uint64 nowUnixSeconds)
+{
+    /*
+     * Built through the same captured-message shape the chat hooks use, so validation and the
+     * role derivation stay in one place, and the whisper scope packs the PAIR rather than the
+     * direction: this observation lands in the very thread the human's own lines opened.
+     */
+    PlayerbotSocialCapturedMessage captured;
+    captured.eventPublicId = request.eventPublicId;
+    captured.replyToEventPublicId = request.replyToEventPublicId;
+    captured.sourceEventPublicId = request.sourceEventPublicId;
+    captured.channel = PlayerbotSocialChannel::Whisper;
+    captured.speakerGuidCounter = botGuidCounter;
+    captured.speakerName = botName;
+    captured.speakerIsHuman = false;
+    captured.targetGuidCounter = targetGuidCounter;
+    captured.languageId = request.languageId;
+    captured.atUnixSeconds = nowUnixSeconds;
+    captured.text = request.text;
+    return PlayerbotSocialObservationFor(captured);
+}
+
 std::vector<PlayerbotSocialNearbySnapshotEntry> PlayerbotSocialSelectNearby(
     PlayerbotSocialChannel channel, std::vector<PlayerbotSocialNearbyCharacter> const& characters)
 {
@@ -1256,6 +1281,20 @@ bool PlayerbotSocialDeliver(Player* bot, Player* target, PlayerbotSocialDelivery
     if (accepted && !prepared.isEmote &&
         (prepared.channel == PlayerbotSocialChannel::General || prepared.channel == PlayerbotSocialChannel::Party))
         CaptureGeneratedAudience(bot, prepared);
+
+    /*
+     * A whisper delivered to a HUMAN re-enters its thread here. Every other surface files a
+     * delivered line back into conversation through some bot listener's capture hook, and a bot
+     * recipient's own hook covers bot-to-bot whispers, but a human recipient has no capture path:
+     * without this the thread accumulated only the human's half and every reply was generated as
+     * first contact - live, a bot re-greeted the same player on each message of one conversation.
+     * Observing directly updates the thread without opening an opportunity, so the bot can never
+     * answer itself.
+     */
+    if (accepted && !prepared.isEmote && prepared.channel == PlayerbotSocialChannel::Whisper && target != nullptr &&
+        GET_PLAYERBOT_AI(target) == nullptr && prepared.origin == PlayerbotSocialEventOrigin::Social)
+        sPlayerbotSocialMgr.Observe(PlayerbotSocialDeliveredWhisperObservation(
+            bot->GetGUID().GetCounter(), bot->GetName(), target->GetGUID().GetCounter(), prepared, nowUnixSeconds));
 
     return accepted;
 }
