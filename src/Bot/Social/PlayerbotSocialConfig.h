@@ -28,6 +28,11 @@ struct PlayerbotSocialConfigValues
     float socialChatWhisperMinFamiliarity = 0.01f;
     uint32 socialChatWhisperPairCooldownSeconds = 21600;
 
+    // How long a HUMAN rests between bot-initiated check-ins, across every bot warm to them. The
+    // pair cooldown alone lets each warm bot open independently, which is a barrage after a long
+    // logout rather than an occasional hello.
+    uint32 socialChatWhisperTargetCooldownSeconds = 3600;
+
     // Server-wide provider (LLM sidecar) call ceiling per sliding hour. Zero means no ceiling.
     uint32 socialChatProviderHourlyBudget = 120;
     uint32 socialChatTelemetryRetentionHours = 48;

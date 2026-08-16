@@ -4008,7 +4008,7 @@ void PlayerbotSocialMgr::NoteHostileLine(uint64 subjectGuidCounter, uint64 speak
 }
 
 bool PlayerbotSocialMgr::NoteWhisperStarterAttempt(PlayerbotSocialRelationshipKey const& key, uint64 nowUnixSeconds,
-                                                   uint64 cooldownSeconds)
+                                                   uint64 cooldownSeconds, uint64 targetCooldownSeconds)
 {
     if (key.botGuidCounter == 0 || key.subjectGuidCounter == 0)
         return false;
@@ -4018,21 +4018,48 @@ bool PlayerbotSocialMgr::NoteWhisperStarterAttempt(PlayerbotSocialRelationshipKe
         return false;
 
     /*
-     * Evicts, unlike the assistance ledger, because a stamp here is not a bound anyone could farm:
-     * losing one permits at most a single early whisper for that pair. The oldest stamp is the one
-     * most likely to have expired anyway.
+     * The pair window rations one bot toward one target and says nothing about how many DIFFERENT
+     * bots may open on that target. Every warm pair of a player who was away comes off its window
+     * together, so each of those bots passed the check above on its own and the 30-second scan
+     * delivered one check-in per scan to the same person: nine bots inside six minutes, with
+     * near-identical openers. The target's own window is what spaces them out.
+     *
+     * Zero disables it, which is what a bot target is given: bot-to-bot check-ins are the ambient
+     * chatter this module exists to produce, and nobody is being flooded there.
      */
-    if (stamped == _whisperStarterAttempts.end() &&
-        _whisperStarterAttempts.size() >= PLAYERBOT_SOCIAL_MAX_TRACKED_PAIRS)
+    auto const targeted = _whisperTargetAttempts.find(key.subjectGuidCounter);
+    if (targetCooldownSeconds != 0 && targeted != _whisperTargetAttempts.end() &&
+        ElapsedSeconds(nowUnixSeconds, targeted->second) < targetCooldownSeconds)
+        return false;
+
+    /*
+     * Evicts, unlike the assistance ledger, because a stamp here is not a bound anyone could farm:
+     * losing one permits at most a single early whisper for that pair or target. The oldest stamp is
+     * the one most likely to have expired anyway.
+     */
+    auto const evictOldest = [](auto& stamps)
     {
-        auto oldest = _whisperStarterAttempts.begin();
-        for (auto it = _whisperStarterAttempts.begin(); it != _whisperStarterAttempts.end(); ++it)
+        auto oldest = stamps.begin();
+        for (auto it = stamps.begin(); it != stamps.end(); ++it)
             if (it->second < oldest->second)
                 oldest = it;
-        _whisperStarterAttempts.erase(oldest);
-    }
+        stamps.erase(oldest);
+    };
+
+    if (stamped == _whisperStarterAttempts.end() &&
+        _whisperStarterAttempts.size() >= PLAYERBOT_SOCIAL_MAX_TRACKED_PAIRS)
+        evictOldest(_whisperStarterAttempts);
 
     _whisperStarterAttempts[key] = nowUnixSeconds;
+
+    if (targetCooldownSeconds != 0)
+    {
+        if (targeted == _whisperTargetAttempts.end() &&
+            _whisperTargetAttempts.size() >= PLAYERBOT_SOCIAL_MAX_TRACKED_PAIRS)
+            evictOldest(_whisperTargetAttempts);
+
+        _whisperTargetAttempts[key.subjectGuidCounter] = nowUnixSeconds;
+    }
 
     return true;
 }
@@ -4040,6 +4067,13 @@ bool PlayerbotSocialMgr::NoteWhisperStarterAttempt(PlayerbotSocialRelationshipKe
 void PlayerbotSocialMgr::ClearWhisperStarterAttempt(PlayerbotSocialRelationshipKey const& key)
 {
     _whisperStarterAttempts.erase(key);
+
+    /*
+     * The target stamp too, and safely: a live one would have refused this pair before it ever
+     * reached the activation that failed, so the only stamp there is the one this same attempt
+     * just wrote. A refused check-in must cost the target's hour no more than it costs the pair's.
+     */
+    _whisperTargetAttempts.erase(key.subjectGuidCounter);
 }
 
 PlayerbotSocialRelationshipValues PlayerbotSocialMgr::ApplyRelationshipDelta(

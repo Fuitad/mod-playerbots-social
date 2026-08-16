@@ -39,6 +39,10 @@ PlayerbotSocialConfigValues NormalizePlayerbotSocialConfig(PlayerbotSocialConfig
         values.socialChatWhisperMinFamiliarity = 0.01f;
     if (values.socialChatWhisperPairCooldownSeconds == 0)
         values.socialChatWhisperPairCooldownSeconds = 21600;
+    // Zero reads as "unset" at the gate, exactly as it does for the pair window, and restoring the
+    // built-in hour is the safe reading: an accidental zero must not reopen the login barrage.
+    if (values.socialChatWhisperTargetCooldownSeconds == 0)
+        values.socialChatWhisperTargetCooldownSeconds = 3600;
     if (values.socialChatTelemetryRetentionHours < 48)
         values.socialChatTelemetryRetentionHours = 48;
     return values;
@@ -72,6 +76,8 @@ void ReloadPlayerbotSocialConfig()
         sConfigMgr->GetOption<float>("PlayerbotsSocial.Whisper.MinFamiliarity", 0.01f);
     values.socialChatWhisperPairCooldownSeconds =
         sConfigMgr->GetOption<uint32>("PlayerbotsSocial.Whisper.PairCooldownSeconds", 21600);
+    values.socialChatWhisperTargetCooldownSeconds =
+        sConfigMgr->GetOption<uint32>("PlayerbotsSocial.Whisper.TargetCooldownSeconds", 3600);
     values.socialChatProviderHourlyBudget =
         sConfigMgr->GetOption<uint32>("PlayerbotsSocial.Provider.HourlyBudget", 120);
     values.socialChatTelemetryRetentionHours =

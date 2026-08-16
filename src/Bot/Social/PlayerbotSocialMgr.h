@@ -1630,18 +1630,21 @@ public:
     void OpenBudgetCircuit(std::string_view reason, uint64 nowUnixSeconds);
 
     /*
-     * Rations relationship-driven whisper starters to one attempt per pair per cooldown window.
-     * Returns true and stamps the window when the pair may attempt now. The map is transient and
-     * evicts like the encounter maps do: losing a stamp costs at most one early whisper, never a
-     * bound that matters.
+     * Rations relationship-driven whisper starters to one attempt per pair per cooldown window, and
+     * to one attempt per TARGET per `targetCooldownSeconds` across every bot warm to them. Returns
+     * true and stamps both windows when the pair may attempt now. The pair window alone lets each of
+     * a returning player's warm bots open independently, which is a barrage rather than a hello.
+     * Pass zero for `targetCooldownSeconds` to ration by pair only. The maps are transient and evict
+     * like the encounter maps do: losing a stamp costs at most one early whisper, never a bound that
+     * matters.
      */
     bool NoteWhisperStarterAttempt(PlayerbotSocialRelationshipKey const& key, uint64 nowUnixSeconds,
-                                   uint64 cooldownSeconds);
+                                   uint64 cooldownSeconds, uint64 targetCooldownSeconds);
 
     /*
-     * Un-stamps a pair whose check-in never opened a request (a budget refusal, a full queue), so
-     * the next scan retries instead of the pair resting its whole cooldown over nothing. The stamp
-     * must mean "a whisper happened", never "a whisper was considered".
+     * Un-stamps a pair and its target when the check-in never opened a request (a budget refusal, a
+     * full queue), so the next scan retries instead of the pair resting its whole cooldown over
+     * nothing. A stamp must mean "a whisper happened", never "a whisper was considered".
      */
     void ClearWhisperStarterAttempt(PlayerbotSocialRelationshipKey const& key);
 
@@ -1946,6 +1949,10 @@ private:
     // Last relationship-driven whisper attempt per pair. Transient and evicting: see
     // NoteWhisperStarterAttempt.
     std::map<PlayerbotSocialRelationshipKey, uint64> _whisperStarterAttempts;
+
+    // The same, per target rather than per pair, so no one person collects every warm bot's check-in
+    // at once. Only targets carrying a window are stamped, which in production is the humans.
+    std::map<uint64, uint64> _whisperTargetAttempts;
 
     // The sliding-window provider budget ledger AdmitProviderCall rules from.
     PlayerbotSocialProviderBudgetState _providerBudget;

@@ -1981,10 +1981,20 @@ void PlayerbotSocialPumpWhisperStarters()
             sPlayerbotSocialMgr.IsOptedOut(pair.key.subjectGuidCounter))
             continue;
 
+        /*
+         * A human collects a check-in from every bot warm to them unless the person themselves is
+         * rationed, because the pair window is per pair: after a long logout every warm pair is past
+         * it at once and this scan drains them one per pass into the same inbox. Bots carry no such
+         * window (zero), since bot-to-bot check-ins are the ambient chatter, not a barrage.
+         */
+        PlayerbotAI* const targetAI = GET_PLAYERBOT_AI(target);
+        bool const targetIsHuman = targetAI == nullptr || targetAI->IsRealPlayer();
+
         // Stamped only after every cheaper refusal above, so a pair that could not whisper anyway
         // does not burn its window finding that out.
-        if (!sPlayerbotSocialMgr.NoteWhisperStarterAttempt(pair.key, nowUnixSeconds,
-                                                           sPlayerbotSocialConfig.socialChatWhisperPairCooldownSeconds))
+        if (!sPlayerbotSocialMgr.NoteWhisperStarterAttempt(
+                pair.key, nowUnixSeconds, sPlayerbotSocialConfig.socialChatWhisperPairCooldownSeconds,
+                targetIsHuman ? sPlayerbotSocialConfig.socialChatWhisperTargetCooldownSeconds : 0))
             continue;
 
         PlayerbotSocialThreadKey key;

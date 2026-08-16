@@ -2021,16 +2021,17 @@ TEST(PlayerbotSocialConversationTest, AScopeRemembersWhenAnyoneLastActuallySpoke
 TEST(PlayerbotSocialConversationTest, AWhisperStarterAttemptIsRationedPerPair)
 {
     // One relationship-driven whisper per pair per cooldown window, so "occasional" stays a promise
-    // rather than a hope. The stamp survives across the window and releases after it.
+    // rather than a hope. The stamp survives across the window and releases after it. A zero target
+    // window is the bot-target case: rationed by pair alone.
     PlayerbotSocialMgr coordinator;
 
-    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt({500, 900}, 1000, 3600));
-    EXPECT_FALSE(coordinator.NoteWhisperStarterAttempt({500, 900}, 2000, 3600));
-    EXPECT_FALSE(coordinator.NoteWhisperStarterAttempt({500, 900}, 4599, 3600));
-    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt({500, 900}, 4600, 3600));
+    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt({500, 900}, 1000, 3600, 0));
+    EXPECT_FALSE(coordinator.NoteWhisperStarterAttempt({500, 900}, 2000, 3600, 0));
+    EXPECT_FALSE(coordinator.NoteWhisperStarterAttempt({500, 900}, 4599, 3600, 0));
+    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt({500, 900}, 4600, 3600, 0));
 
     // Another pair is not held hostage by the first pair's stamp.
-    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt({500, 901}, 2000, 3600));
+    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt({500, 901}, 2000, 3600, 0));
 }
 
 // Delivery telemetry -------------------------------------------------------------------------------
@@ -3049,11 +3050,47 @@ TEST(PlayerbotSocialCoordinatorTest, ARefusedWhisperCheckInDoesNotBurnThePairCoo
     PlayerbotSocialMgr coordinator;
     PlayerbotSocialRelationshipKey const key{500, 900};
 
-    ASSERT_TRUE(coordinator.NoteWhisperStarterAttempt(key, 1000, 21600));
-    EXPECT_FALSE(coordinator.NoteWhisperStarterAttempt(key, 1030, 21600)) << "the stamp itself must hold";
+    ASSERT_TRUE(coordinator.NoteWhisperStarterAttempt(key, 1000, 21600, 3600));
+    EXPECT_FALSE(coordinator.NoteWhisperStarterAttempt(key, 1030, 21600, 3600)) << "the stamp itself must hold";
 
     coordinator.ClearWhisperStarterAttempt(key);
-    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt(key, 1030, 21600)) << "a cleared pair may retry on the next scan";
+    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt(key, 1030, 21600, 3600))
+        << "a cleared pair may retry on the next scan";
+
+    // And the target's window was released with it, so the retry is not refused on the way past the
+    // second gate either, nor is the next warm bot to reach that person.
+    coordinator.ClearWhisperStarterAttempt(key);
+    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt({501, 900}, 1060, 21600, 3600))
+        << "a refused check-in must not spend the target's window";
+}
+
+TEST(PlayerbotSocialCoordinatorTest, AWhisperCheckInIsRationedPerTargetAcrossDifferentBots)
+{
+    /*
+     * A player who logs in after a night away is warm with many bots at once, and every one of
+     * those pairs comes off its six-hour window together. The pair cooldown says nothing about who
+     * is being whispered, so each of those bots passed it on its own and the 30-second scan handed
+     * the same human one check-in per scan: nine bots opened on Deszy inside six minutes with
+     * near-identical text. The target carries a window of its own.
+     */
+    PlayerbotSocialMgr coordinator;
+
+    ASSERT_TRUE(coordinator.NoteWhisperStarterAttempt({500, 900}, 1000, 21600, 3600));
+
+    // The next two scans, thirty seconds apart, each a different warm bot toward the same human.
+    EXPECT_FALSE(coordinator.NoteWhisperStarterAttempt({501, 900}, 1030, 21600, 3600))
+        << "a second bot must not open on a human who was just checked in on";
+    EXPECT_FALSE(coordinator.NoteWhisperStarterAttempt({502, 900}, 1060, 21600, 3600));
+
+    // Somebody else is not held hostage by that human's window.
+    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt({501, 901}, 1030, 21600, 3600));
+
+    // And the window releases, so the check-ins are spaced rather than suppressed.
+    EXPECT_TRUE(coordinator.NoteWhisperStarterAttempt({501, 900}, 4600, 21600, 3600));
+
+    // The window re-arms on each admitted check-in rather than only on the first, so the queue of
+    // warm bots is spread out indefinitely instead of draining after one hour of quiet.
+    EXPECT_FALSE(coordinator.NoteWhisperStarterAttempt({502, 900}, 4630, 21600, 3600));
 }
 
 TEST(PlayerbotSocialCoordinatorTest, APreloadedWarmRelationshipIsVisibleToTheWhisperScan)
