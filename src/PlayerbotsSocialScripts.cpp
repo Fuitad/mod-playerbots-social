@@ -105,7 +105,7 @@ bool IsSocialBotListener(Player* player)
 {
     if (!player || !player->IsInWorld())
         return false;
-    PlayerbotAI* const botAI = GET_PLAYERBOT_AI(player);
+    PlayerbotAI const* const botAI = GET_PLAYERBOT_AI(player);
     return botAI && !IsSelfBot(player);
 }
 
@@ -118,7 +118,7 @@ void CaptureSocialListener(PlayerbotAI* botAI, Player* speaker, uint32 type, uin
     if (!botAI || IsSelfBot(botAI->GetBot()) || !speaker)
         return;
 
-    PlayerbotAI* const speakerAI = GET_PLAYERBOT_AI(speaker);
+    PlayerbotAI const* const speakerAI = GET_PLAYERBOT_AI(speaker);
     if (!PlayerbotSocialSpeakerCanOpenOpportunity(!speakerAI || IsSelfBot(speaker), originatedFromSocialDelivery))
         return;
 

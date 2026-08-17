@@ -1536,7 +1536,7 @@ void PlayerbotSocialPumpBiographies(uint32 diff)
          * person behind them, and generating a player profile for that character would invent a
          * personality for somebody who did not ask for one.
          */
-        PlayerbotAI* const botAI = GET_PLAYERBOT_AI(bot);
+        PlayerbotAI const* const botAI = GET_PLAYERBOT_AI(bot);
         if (botAI == nullptr || IsSelfBot(bot))
             continue;
 
@@ -1605,7 +1605,7 @@ bool PlayerbotSocialQueueStarterSource(PlayerbotAI* sourceAI, PlayerbotSocialSta
             candidate->GetTeamId() != sourceBot->GetTeamId())
             continue;
 
-        PlayerbotAI* const candidateAI = GET_PLAYERBOT_AI(candidate);
+        PlayerbotAI const* const candidateAI = GET_PLAYERBOT_AI(candidate);
         bool const characterIsHuman = candidateAI == nullptr || IsSelfBot(candidate);
         bool const sameMap = candidate->GetMap() == sourceBot->GetMap();
         bool const samePhase = (candidate->GetPhaseMask() & sourceBot->GetPhaseMask()) != 0;
@@ -1777,7 +1777,7 @@ void PlayerbotSocialPumpStarters()
 
         uint32 const zoneId = starter.zoneId;
         Player* const audience = ObjectAccessor::FindPlayerByLowGUID(starter.audienceGuidCounter);
-        PlayerbotAI* const audienceAI = audience == nullptr ? nullptr : GET_PLAYERBOT_AI(audience);
+        PlayerbotAI const* const audienceAI = audience == nullptr ? nullptr : GET_PLAYERBOT_AI(audience);
 
         // In the autonomous society stage a managed bot is a valid audience; every earlier stage
         // still demands the real player the starter was admitted against.
@@ -1798,7 +1798,7 @@ void PlayerbotSocialPumpStarters()
         if (sourceBot == nullptr || !sourceBot->IsInWorld())
             continue;
 
-        PlayerbotAI* const sourceAI = GET_PLAYERBOT_AI(sourceBot);
+        PlayerbotAI const* const sourceAI = GET_PLAYERBOT_AI(sourceBot);
         if (sourceAI == nullptr || IsSelfBot(sourceBot))
             continue;
 
@@ -1966,7 +1966,7 @@ void PlayerbotSocialPumpWhisperStarters()
         if (bot == nullptr || !bot->IsInWorld() || bot->InBattleground())
             continue;
 
-        PlayerbotAI* const botAI = GET_PLAYERBOT_AI(bot);
+        PlayerbotAI const* const botAI = GET_PLAYERBOT_AI(bot);
         if (botAI == nullptr || IsSelfBot(bot))
             continue;
 
@@ -1987,7 +1987,7 @@ void PlayerbotSocialPumpWhisperStarters()
          * it at once and this scan drains them one per pass into the same inbox. Bots carry no such
          * window (zero), since bot-to-bot check-ins are the ambient chatter, not a barrage.
          */
-        PlayerbotAI* const targetAI = GET_PLAYERBOT_AI(target);
+        PlayerbotAI const* const targetAI = GET_PLAYERBOT_AI(target);
         bool const targetIsHuman = targetAI == nullptr || IsSelfBot(target);
 
         // Stamped only after every cheaper refusal above, so a pair that could not whisper anyway
