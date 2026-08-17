@@ -392,12 +392,9 @@ enum class PlayerbotSocialBudgetDecision : uint8
  * every call is refused before the bucket is touched, so admission honours the same hard stop the
  * pumps and delivery already do, and the refusals never escalate into a second trip.
  */
-[[nodiscard]] PlayerbotSocialBudgetDecision PlayerbotSocialGovernProviderCall(PlayerbotSocialProviderBudgetState& state,
-                                                                              uint64 nowUnixSeconds,
-                                                                              uint32 hourlyBudget,
-                                                                              bool continuation = false,
-                                                                              bool circuitOpen = false,
-                                                                              bool humanEngagement = false);
+[[nodiscard]] PlayerbotSocialBudgetDecision PlayerbotSocialGovernProviderCall(
+    PlayerbotSocialProviderBudgetState& state, uint64 nowUnixSeconds, uint32 hourlyBudget, bool continuation = false,
+    bool circuitOpen = false, bool humanEngagement = false);
 
 /*
  * Whether a request may draw the continuation reserve: any reply (its empty starter subject is

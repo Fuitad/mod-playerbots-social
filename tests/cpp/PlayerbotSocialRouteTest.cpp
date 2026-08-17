@@ -1103,24 +1103,28 @@ TEST(PlayerbotSocialScopeTest, ConcurrentResolveAndPruneKeepOneCanonicalScopePer
 
     for (std::size_t worker = 0; worker < RESOLVER_COUNT; ++worker)
     {
-        workers.emplace_back([&, worker] {
+        workers.emplace_back(
+            [&, worker]
+            {
+                for (std::size_t iteration = 0; iteration < ITERATION_COUNT; ++iteration)
+                {
+                    uint64 const now = 1 + iteration * (PLAYERBOT_SOCIAL_THREAD_STALE_SECONDS + 2);
+                    iterationStart.arrive_and_wait();
+                    resolved[worker][iteration] = registry.Resolve({iteration + 1, iteration + 10001}, now);
+                }
+            });
+    }
+
+    workers.emplace_back(
+        [&]
+        {
             for (std::size_t iteration = 0; iteration < ITERATION_COUNT; ++iteration)
             {
                 uint64 const now = 1 + iteration * (PLAYERBOT_SOCIAL_THREAD_STALE_SECONDS + 2);
                 iterationStart.arrive_and_wait();
-                resolved[worker][iteration] = registry.Resolve({iteration + 1, iteration + 10001}, now);
+                registry.Prune(now);
             }
         });
-    }
-
-    workers.emplace_back([&] {
-        for (std::size_t iteration = 0; iteration < ITERATION_COUNT; ++iteration)
-        {
-            uint64 const now = 1 + iteration * (PLAYERBOT_SOCIAL_THREAD_STALE_SECONDS + 2);
-            iterationStart.arrive_and_wait();
-            registry.Prune(now);
-        }
-    });
 
     for (std::thread& worker : workers)
         worker.join();
