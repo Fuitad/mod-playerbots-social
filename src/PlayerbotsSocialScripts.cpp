@@ -106,7 +106,7 @@ bool IsSocialBotListener(Player* player)
     if (!player || !player->IsInWorld())
         return false;
     PlayerbotAI* const botAI = GET_PLAYERBOT_AI(player);
-    return botAI && !botAI->IsRealPlayer();
+    return botAI && !IsSelfBot(player);
 }
 
 void CaptureSocialListener(PlayerbotAI* botAI, Player* speaker, uint32 type, uint32 language,
@@ -115,12 +115,11 @@ void CaptureSocialListener(PlayerbotAI* botAI, Player* speaker, uint32 type, uin
                            PlayerbotSocialGate const& gate, uint64 sayCohortScopeId = 0,
                            std::string_view replyToEventPublicId = {}, std::string_view sourceEventPublicId = {})
 {
-    if (!botAI || botAI->IsRealPlayer() || !speaker)
+    if (!botAI || IsSelfBot(botAI->GetBot()) || !speaker)
         return;
 
     PlayerbotAI* const speakerAI = GET_PLAYERBOT_AI(speaker);
-    if (!PlayerbotSocialSpeakerCanOpenOpportunity(!speakerAI || speakerAI->IsRealPlayer(),
-                                                  originatedFromSocialDelivery))
+    if (!PlayerbotSocialSpeakerCanOpenOpportunity(!speakerAI || IsSelfBot(speaker), originatedFromSocialDelivery))
         return;
 
     Player* const bot = botAI->GetBot();
@@ -147,7 +146,7 @@ void QueueAmbientStarterSource(Player* player, PlayerbotSocialStarterSourceKind 
         return;
 
     PlayerbotAI* const botAI = GET_PLAYERBOT_AI(player);
-    if (botAI == nullptr || botAI->IsRealPlayer())
+    if (botAI == nullptr || IsSelfBot(player))
         return;
 
     AreaTableEntry const* zone = sAreaTableStore.LookupEntry(zoneId);

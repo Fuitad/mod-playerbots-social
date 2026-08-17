@@ -1537,7 +1537,7 @@ void PlayerbotSocialPumpBiographies(uint32 diff)
          * personality for somebody who did not ask for one.
          */
         PlayerbotAI* const botAI = GET_PLAYERBOT_AI(bot);
-        if (botAI == nullptr || botAI->IsRealPlayer())
+        if (botAI == nullptr || IsSelfBot(bot))
             continue;
 
         // Consent is checked here rather than inside the coordinator because it is the same
@@ -1606,7 +1606,7 @@ bool PlayerbotSocialQueueStarterSource(PlayerbotAI* sourceAI, PlayerbotSocialSta
             continue;
 
         PlayerbotAI* const candidateAI = GET_PLAYERBOT_AI(candidate);
-        bool const characterIsHuman = candidateAI == nullptr || candidateAI->IsRealPlayer();
+        bool const characterIsHuman = candidateAI == nullptr || IsSelfBot(candidate);
         bool const sameMap = candidate->GetMap() == sourceBot->GetMap();
         bool const samePhase = (candidate->GetPhaseMask() & sourceBot->GetPhaseMask()) != 0;
         bool const visible = sameMap && samePhase && sourceBot->CanSeeOrDetect(candidate);
@@ -1781,7 +1781,7 @@ void PlayerbotSocialPumpStarters()
 
         // In the autonomous society stage a managed bot is a valid audience; every earlier stage
         // still demands the real player the starter was admitted against.
-        bool const audienceIsBot = audienceAI != nullptr && !audienceAI->IsRealPlayer();
+        bool const audienceIsBot = audienceAI != nullptr && !IsSelfBot(audience);
         bool const botAudienceAcceptable = gate.stage == PlayerbotSocialRolloutStage::AutonomousSociety;
         if (audience == nullptr || !audience->IsInWorld() || (audienceIsBot && !botAudienceAcceptable) ||
             sPlayerbotSocialMgr.IsOptedOut(starter.audienceGuidCounter))
@@ -1799,7 +1799,7 @@ void PlayerbotSocialPumpStarters()
             continue;
 
         PlayerbotAI* const sourceAI = GET_PLAYERBOT_AI(sourceBot);
-        if (sourceAI == nullptr || sourceAI->IsRealPlayer())
+        if (sourceAI == nullptr || IsSelfBot(sourceBot))
             continue;
 
         bool sourceInScope = false;
@@ -1967,7 +1967,7 @@ void PlayerbotSocialPumpWhisperStarters()
             continue;
 
         PlayerbotAI* const botAI = GET_PLAYERBOT_AI(bot);
-        if (botAI == nullptr || botAI->IsRealPlayer())
+        if (botAI == nullptr || IsSelfBot(bot))
             continue;
 
         Player* const target =
@@ -1988,7 +1988,7 @@ void PlayerbotSocialPumpWhisperStarters()
          * window (zero), since bot-to-bot check-ins are the ambient chatter, not a barrage.
          */
         PlayerbotAI* const targetAI = GET_PLAYERBOT_AI(target);
-        bool const targetIsHuman = targetAI == nullptr || targetAI->IsRealPlayer();
+        bool const targetIsHuman = targetAI == nullptr || IsSelfBot(target);
 
         // Stamped only after every cheaper refusal above, so a pair that could not whisper anyway
         // does not burn its window finding that out.
@@ -2433,7 +2433,7 @@ void CaptureGeneratedAudience(Player* speaker, PlayerbotSocialDeliveryRequest co
             continue;
 
         PlayerbotAI* const listenerAI = GET_PLAYERBOT_AI(listener);
-        if (listenerAI == nullptr || listenerAI->IsRealPlayer())
+        if (listenerAI == nullptr || IsSelfBot(listener))
             continue;
 
         bool const eligibleAudience =
