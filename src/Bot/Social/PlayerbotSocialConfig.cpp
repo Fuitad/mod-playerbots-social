@@ -78,6 +78,7 @@ void ReloadPlayerbotSocialConfig()
         sConfigMgr->GetOption<uint32>("PlayerbotsSocial.Whisper.PairCooldownSeconds", 21600);
     values.socialChatWhisperTargetCooldownSeconds =
         sConfigMgr->GetOption<uint32>("PlayerbotsSocial.Whisper.TargetCooldownSeconds", 3600);
+    values.socialChatWhisperMemoryEnable = sConfigMgr->GetOption<bool>("PlayerbotsSocial.WhisperMemory.Enable", true);
     values.socialChatProviderHourlyBudget =
         sConfigMgr->GetOption<uint32>("PlayerbotsSocial.Provider.HourlyBudget", 120);
     values.socialChatTelemetryRetentionHours =

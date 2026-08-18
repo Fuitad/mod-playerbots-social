@@ -502,7 +502,8 @@ PlayerbotSocialThreadHandle PlayerbotSocialMgr::Observe(PlayerbotSocialObservati
         line.text = observation.text;
 
         bool const speakerConsented = !observation.speakerIsHuman || !IsOptedOut(observation.speakerGuidCounter);
-        chosen->extraction.Offer(observation.key.channel, std::move(line), speakerConsented, observation.atUnixSeconds);
+        chosen->extraction.Offer(observation.key.channel, std::move(line), speakerConsented, observation.atUnixSeconds,
+                                 sPlayerbotSocialConfig.socialChatWhisperMemoryEnable);
 
         /*
          * A duplicate is still a real turn. Listener fanout is collapsed at the route boundary, so
@@ -583,14 +584,36 @@ std::vector<PlayerbotSocialIdleThread> PlayerbotSocialMgr::CollectIdleExtraction
             PlayerbotSocialIdleThread idle;
             idle.threadPublicId = thread.publicId;
             idle.key = scope.first;
-            idle.snapshot = PlayerbotSocialBuildExtractionSnapshot(thread.extraction, consents, nowUnixSeconds);
+            idle.snapshot =
+                PlayerbotSocialBuildExtractionSnapshot(thread.extraction, consents, nowUnixSeconds, scope.first.channel,
+                                                       sPlayerbotSocialConfig.socialChatWhisperMemoryEnable);
 
             // Cleared whether or not it was usable. A refusal is a decision about this conversation,
             // not an invitation to keep the words and ask again next tick.
             thread.extraction.Clear();
 
             if (idle.snapshot.Accepted())
+            {
                 collected.push_back(std::move(idle));
+                continue;
+            }
+
+            /*
+             * The refusal names itself in the feed rather than vanishing with the buffer. This is
+             * the Suppressed outcome the extraction event model distinguishes for exactly this
+             * moment: without it, "working, nothing eligible" and "quietly refusing everything"
+             * read identically to an operator - and the whisper kill switch's transition case
+             * (lines buffered while it was on, refused once it is off) would be invisible.
+             */
+            PlayerbotSocialExtractionAttempt suppressed;
+            suppressed.threadPublicId = idle.threadPublicId;
+            suppressed.botGuidCounter = idle.snapshot.holderGuidCounter;
+            suppressed.channel = idle.key.channel;
+            suppressed.subjectCount = idle.snapshot.subjects.size();
+            suppressed.lineCount = idle.snapshot.lines.size();
+            suppressed.refusal = idle.snapshot.refusal;
+            suppressed.occurredAtUnixSeconds = nowUnixSeconds;
+            RecordEvent(PlayerbotSocialMakeExtractionEvent(suppressed));
         }
     }
 
@@ -624,13 +647,14 @@ std::size_t PlayerbotSocialMgr::RequestIdleExtractions(uint64 nowUnixSeconds)
         }
 
         /*
-         * The scope is the SURFACE, not a judgement. General and say are heard by anyone nearby so
-         * they are public; a party is party. A whisper cannot reach here at all, because its text
-         * is never buffered, and the provider seam refuses one again if it somehow did.
+         * The scope is the SURFACE, not a judgement: the exhaustive mapping in the repository
+         * derives it, whisper included now that a whisper thread can reach here under the operator's
+         * switch. A channel the mapping does not recognize is skipped rather than misfiled as
+         * public, which would persist a private conversation under the least private label.
          */
-        PlayerbotSocialPrivacyScope const scope = idle.key.channel == PlayerbotSocialChannel::Party
-                                                      ? PlayerbotSocialPrivacyScope::Party
-                                                      : PlayerbotSocialPrivacyScope::Public;
+        PlayerbotSocialPrivacyScope scope = PlayerbotSocialPrivacyScope::Public;
+        if (!PlayerbotSocialPrivacyScopeForChannel(idle.key.channel, scope))
+            continue;
 
         uint64 const token = _nextMemoryRequestToken++;
         if (!_provider->SubmitMemory(token, idle.snapshot.holderGuidCounter, idle.threadPublicId, scope,
@@ -762,8 +786,7 @@ std::size_t PlayerbotSocialMgr::ApplyExtractedMemories(uint64 memoryRequestToken
     PlayerbotSocialExtractionAttempt attempt;
     attempt.threadPublicId = request.threadPublicId;
     attempt.botGuidCounter = request.botGuidCounter;
-    attempt.channel = request.scope == PlayerbotSocialPrivacyScope::Party ? PlayerbotSocialChannel::Party
-                                                                          : PlayerbotSocialChannel::General;
+    attempt.channel = PlayerbotSocialChannelForPrivacyScope(request.scope);
     attempt.subjectCount = request.subjects.size();
     attempt.lineCount = memories.size();
     attempt.answered = true;
@@ -798,8 +821,7 @@ std::size_t PlayerbotSocialMgr::AbandonStaleMemoryRequests(uint64 nowUnixSeconds
         PlayerbotSocialExtractionAttempt lost;
         lost.threadPublicId = request->second.threadPublicId;
         lost.botGuidCounter = request->second.botGuidCounter;
-        lost.channel = request->second.scope == PlayerbotSocialPrivacyScope::Party ? PlayerbotSocialChannel::Party
-                                                                                   : PlayerbotSocialChannel::General;
+        lost.channel = PlayerbotSocialChannelForPrivacyScope(request->second.scope);
         lost.subjectCount = request->second.subjects.size();
         lost.occurredAtUnixSeconds = request->second.issuedAtUnixSeconds;
         RecordEvent(PlayerbotSocialMakeExtractionEvent(lost));

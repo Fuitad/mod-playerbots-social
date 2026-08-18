@@ -1052,6 +1052,48 @@ bool PlayerbotSocialMemoryScopeQueryFor(PlayerbotSocialChannel channel, Playerbo
     return false;
 }
 
+bool PlayerbotSocialPrivacyScopeForChannel(PlayerbotSocialChannel channel, PlayerbotSocialPrivacyScope& scope)
+{
+    /*
+     * The write-side twin of the read query above: the surface a line was heard on decides the
+     * scope its extracted memory persists with. The scope is the SURFACE, not a judgement. Exhaustive
+     * and failing closed, because a channel value this build does not recognize misfiled as public
+     * would persist a private conversation under the least private label it has.
+     */
+    switch (channel)
+    {
+        case PlayerbotSocialChannel::General:
+        case PlayerbotSocialChannel::Say:
+            scope = PlayerbotSocialPrivacyScope::Public;
+            return true;
+        case PlayerbotSocialChannel::Party:
+            scope = PlayerbotSocialPrivacyScope::Party;
+            return true;
+        case PlayerbotSocialChannel::Whisper:
+            scope = PlayerbotSocialPrivacyScope::Whisper;
+            return true;
+    }
+
+    return false;
+}
+
+PlayerbotSocialChannel PlayerbotSocialChannelForPrivacyScope(PlayerbotSocialPrivacyScope scope)
+{
+    // The reverse mapping extraction telemetry files under. Public collapses to General because the
+    // event model has no "public" channel; the two public surfaces read identically in the feed.
+    switch (scope)
+    {
+        case PlayerbotSocialPrivacyScope::Party:
+            return PlayerbotSocialChannel::Party;
+        case PlayerbotSocialPrivacyScope::Whisper:
+            return PlayerbotSocialChannel::Whisper;
+        case PlayerbotSocialPrivacyScope::Public:
+            break;
+    }
+
+    return PlayerbotSocialChannel::General;
+}
+
 bool PlayerbotSocialMemoryScopeIsWithinQuery(PlayerbotSocialPrivacyScope scope, PlayerbotSocialMemoryScopeQuery query)
 {
     // An invalid scope belongs to no query, so it is never removed by a replacement and never

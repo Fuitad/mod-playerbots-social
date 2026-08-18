@@ -1818,9 +1818,10 @@ private:
          * It exists because extraction fires at an idle boundary: a thread is eligible precisely
          * because nobody has spoken for the staleness window, so the words must have been kept from
          * the moment they arrived. The narrowings that make that acceptable are enforced by the
-         * buffer itself rather than here, and two are worth naming at the member: a WHISPER is never
-         * buffered on any terms, so the private surfaces still leave nothing readable behind, and a
-         * human's line is kept only while they consent, with an opt out purging what was held.
+         * buffer itself rather than here, and two are worth naming at the member: a WHISPER is
+         * buffered only while the operator's whisper memory switch is on (and refused everywhere the
+         * switch has not been passed explicitly), and a human's line is kept only while they
+         * consent, with an opt out purging what was held.
          */
         PlayerbotSocialExtractionBuffer extraction;
 

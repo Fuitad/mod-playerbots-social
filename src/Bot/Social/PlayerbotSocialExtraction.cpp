@@ -17,14 +17,16 @@ char const* PlayerbotSocialBufferRejectionName(PlayerbotSocialBufferRejection re
     {
         case PlayerbotSocialBufferRejection::Accepted:
             return "accepted";
-        case PlayerbotSocialBufferRejection::WhisperNeverBuffered:
-            return "whisper_never_buffered";
+        case PlayerbotSocialBufferRejection::WhisperMemoryDisabled:
+            return "whisper_memory_disabled";
         case PlayerbotSocialBufferRejection::EmptyText:
             return "empty_text";
         case PlayerbotSocialBufferRejection::TextTooLong:
             return "text_too_long";
         case PlayerbotSocialBufferRejection::SpeakerNotConsented:
             return "speaker_not_consented";
+        case PlayerbotSocialBufferRejection::UnrecognizedChannel:
+            return "unrecognized_channel";
     }
 
     return "unknown";
@@ -32,20 +34,22 @@ char const* PlayerbotSocialBufferRejectionName(PlayerbotSocialBufferRejection re
 
 PlayerbotSocialBufferRejection PlayerbotSocialExtractionBuffer::Offer(PlayerbotSocialChannel channel,
                                                                       PlayerbotSocialBufferedLine line,
-                                                                      bool speakerConsented, uint64 nowUnixSeconds)
+                                                                      bool speakerConsented, uint64 nowUnixSeconds,
+                                                                      bool whisperMemoryEnabled)
 {
     /*
-     * The surface decides first, before anything about the speaker is consulted. A consenting player
-     * has agreed to bots remembering conversations, which is not the same as agreeing to their
-     * whispers being held in memory for a model to read, so consent cannot unlock this.
+     * The surface decides first, before anything about the speaker is consulted. The operator's
+     * switch is what admits the whisper surface at all; once admitted, a whisper follows the same
+     * per speaker consent as every other channel below. Consent alone cannot unlock this: a player
+     * who agreed to bots remembering conversations has not overridden an operator who said no.
      */
-    if (channel == PlayerbotSocialChannel::Whisper)
-        return PlayerbotSocialBufferRejection::WhisperNeverBuffered;
+    if (channel == PlayerbotSocialChannel::Whisper && !whisperMemoryEnabled)
+        return PlayerbotSocialBufferRejection::WhisperMemoryDisabled;
 
     // An unrecognised channel is refused for the same reason routing fails closed: a surface this
     // build does not know about is not one whose privacy expectations it can honour.
     if (!PlayerbotSocialChannelIsValid(channel))
-        return PlayerbotSocialBufferRejection::WhisperNeverBuffered;
+        return PlayerbotSocialBufferRejection::UnrecognizedChannel;
 
     if (line.text.empty())
         return PlayerbotSocialBufferRejection::EmptyText;
@@ -162,6 +166,8 @@ char const* PlayerbotSocialSnapshotRefusalName(PlayerbotSocialSnapshotRefusal re
             return "unsafe_content";
         case PlayerbotSocialSnapshotRefusal::NoBotPresent:
             return "no_bot_present";
+        case PlayerbotSocialSnapshotRefusal::WhisperMemoryDisabled:
+            return "whisper_memory_disabled";
     }
 
     return "unknown";
@@ -169,10 +175,23 @@ char const* PlayerbotSocialSnapshotRefusalName(PlayerbotSocialSnapshotRefusal re
 
 PlayerbotSocialExtractionSnapshot PlayerbotSocialBuildExtractionSnapshot(
     PlayerbotSocialExtractionBuffer const& buffer, PlayerbotSocialExtractionConsent const& consents,
-    uint64 nowUnixSeconds)
+    uint64 nowUnixSeconds, PlayerbotSocialChannel channel, bool whisperMemoryEnabled)
 {
     PlayerbotSocialExtractionSnapshot snapshot;
     bool hadConsentedHuman = false;
+
+    /*
+     * The disable transition. Lines in a whisper buffer were admitted while the operator's switch
+     * was on; if it is off by the time the thread goes idle, they must not be submitted on the
+     * strength of a permission that no longer stands. The caller clears the buffer after every
+     * snapshot attempt, so this refusal is also what erases them. Defaulted to the refusing state:
+     * a caller that never learned about the switch cannot submit a whisper thread.
+     */
+    if (channel == PlayerbotSocialChannel::Whisper && !whisperMemoryEnabled)
+    {
+        snapshot.refusal = PlayerbotSocialSnapshotRefusal::WhisperMemoryDisabled;
+        return snapshot;
+    }
 
     // No callable is a refusal rather than a crash or an assumption of consent. This runs on the
     // world thread beside everything else, and neither of those is a reasonable thing to do there.

@@ -54,6 +54,14 @@ PlayerbotsSocial.Whisper.PairCooldownSeconds = 21600
 # Zero falls back to the default. Default: 3600 (1 hour)
 PlayerbotsSocial.Whisper.TargetCooldownSeconds = 3600
 
+# Whether whisper conversations may feed idle memory extraction. What is persisted is an LLM
+# paraphrase scoped to the (bot, person) pair, recalled only in later whispers between that same
+# pair; raw whisper text lives only in the bounded transient buffer and is dropped at extraction,
+# and a speaker's opt-out or reset purges it. Off restores the absolute rule: whisper text is never
+# held in server memory at all. Default on for a single-operator server; hosting other humans is a
+# reason to decide this deliberately. Default: 1
+PlayerbotsSocial.WhisperMemory.Enable = 1
+
 # Server-wide LLM provider call ceiling per hour, spent as a token bucket (a small burst plus a
 # steady refill) so lively stays steady instead of a burst followed by silence. Requests beyond it
 # are refused with the budget_exhausted reason; only a pathological refusal volume (twenty times

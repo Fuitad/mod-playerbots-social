@@ -208,24 +208,28 @@ TEST(PlayerbotSocialPromptContextBufferTest, NearbyHumanConsentIsRecheckedBefore
         << "a human who opted out after capture must not cross the provider seam";
 }
 
-TEST(PlayerbotSocialExtractionBufferTest, AWhisperIsNeverBufferedOnAnyTerms)
+TEST(PlayerbotSocialExtractionBufferTest, AWhisperIsNeverBufferedWhileWhisperMemoryIsDisabled)
 {
     /*
      * The single most sensitive thing this feature could do is hold private player to player
-     * messages in server memory for the length of a staleness window, so it does not do it at all.
-     * Refused before consent is even consulted: a consenting player has agreed to bots remembering
-     * conversations, not to their whispers being buffered for a model to read.
+     * messages in server memory against the operator's word, so the kill switch is checked before
+     * consent is even consulted: with whisper memory disabled, no consent can put a whisper here.
      *
-     * The cost is real and accepted: idle extraction can never produce a whisper scoped memory. The
-     * reactive whisper path is untouched.
+     * The default is the refusing state: a caller that never learned about the flag keeps today's
+     * behavior, so the surface fails closed at every un-updated call site.
      */
     PlayerbotSocialExtractionBuffer buffer;
 
     EXPECT_EQ(buffer.Offer(PlayerbotSocialChannel::Whisper, PlayerLine(1, "meet me at the bank"), true, 1000),
-              PlayerbotSocialBufferRejection::WhisperNeverBuffered);
+              PlayerbotSocialBufferRejection::WhisperMemoryDisabled);
     EXPECT_EQ(buffer.LineCount(), 0u);
 
-    // And the other three surfaces are unaffected by that rule.
+    EXPECT_EQ(buffer.Offer(PlayerbotSocialChannel::Whisper, PlayerLine(1, "meet me at the bank"), true, 1000,
+                           /*whisperMemoryEnabled=*/false),
+              PlayerbotSocialBufferRejection::WhisperMemoryDisabled);
+    EXPECT_EQ(buffer.LineCount(), 0u);
+
+    // And the other three surfaces are unaffected by the switch either way.
     for (PlayerbotSocialChannel channel :
          {PlayerbotSocialChannel::General, PlayerbotSocialChannel::Say, PlayerbotSocialChannel::Party})
     {
@@ -233,6 +237,41 @@ TEST(PlayerbotSocialExtractionBufferTest, AWhisperIsNeverBufferedOnAnyTerms)
         EXPECT_EQ(open.Offer(channel, PlayerLine(1, "well met"), true, 1000), PlayerbotSocialBufferRejection::Accepted);
         EXPECT_EQ(open.LineCount(), 1u);
     }
+}
+
+TEST(PlayerbotSocialExtractionBufferTest, AWhisperIsBufferedUnderConsentWhenWhisperMemoryIsEnabled)
+{
+    /*
+     * With the operator switch on, the whisper surface follows the same per speaker rule as the
+     * public ones: a human's line needs their consent, a bot's line has no consent to give. The
+     * switch and consent are independent gates, so each is exercised with the other held open.
+     */
+    PlayerbotSocialExtractionBuffer buffer;
+
+    EXPECT_EQ(buffer.Offer(PlayerbotSocialChannel::Whisper, PlayerLine(1, "remember I main a rogue"), false, 1000,
+                           /*whisperMemoryEnabled=*/true),
+              PlayerbotSocialBufferRejection::SpeakerNotConsented);
+    EXPECT_EQ(buffer.LineCount(), 0u);
+
+    EXPECT_EQ(buffer.Offer(PlayerbotSocialChannel::Whisper, PlayerLine(1, "remember I main a rogue"), true, 1000,
+                           /*whisperMemoryEnabled=*/true),
+              PlayerbotSocialBufferRejection::Accepted);
+    EXPECT_EQ(buffer.Offer(PlayerbotSocialChannel::Whisper, BotLine(2, "noted, sneaky business it is"), false, 1001,
+                           /*whisperMemoryEnabled=*/true),
+              PlayerbotSocialBufferRejection::Accepted);
+    EXPECT_EQ(buffer.LineCount(), 2u);
+}
+
+TEST(PlayerbotSocialExtractionBufferTest, AnUnrecognizedChannelIsRefusedWithItsOwnReason)
+{
+    // An unknown surface fails closed with a name that says so. Reporting it as the whisper kill
+    // switch would make the disabled-state telemetry unreadable the day a channel value corrupts.
+    PlayerbotSocialExtractionBuffer buffer;
+
+    EXPECT_EQ(buffer.Offer(static_cast<PlayerbotSocialChannel>(250), PlayerLine(1, "well met"), true, 1000,
+                           /*whisperMemoryEnabled=*/true),
+              PlayerbotSocialBufferRejection::UnrecognizedChannel);
+    EXPECT_EQ(buffer.LineCount(), 0u);
 }
 
 TEST(PlayerbotSocialExtractionBufferTest, ANonConsentedPlayersWordsNeverEnterMemory)
@@ -271,6 +310,24 @@ TEST(PlayerbotSocialExtractionBufferTest, AnOptOutPurgesWhatWasAlreadyBuffered)
     EXPECT_EQ(buffer.Lines().front().speakerGuidCounter, 2u);
     // The byte accounting has to follow, or the buffer slowly refuses lines it is no longer holding.
     EXPECT_EQ(buffer.ByteCount(), std::string("where").size());
+}
+
+TEST(PlayerbotSocialExtractionBufferTest, AnOptOutPurgesBufferedWhisperLinesToo)
+{
+    // The purge promise is surface independent: a whisper held under consent is gone the moment the
+    // consent is, exactly as a public line would be.
+    PlayerbotSocialExtractionBuffer buffer;
+    ASSERT_EQ(buffer.Offer(PlayerbotSocialChannel::Whisper, PlayerLine(1, "my bank alt is Coppervault"), true, 1000,
+                           /*whisperMemoryEnabled=*/true),
+              PlayerbotSocialBufferRejection::Accepted);
+    ASSERT_EQ(buffer.Offer(PlayerbotSocialChannel::Whisper, BotLine(2, "your secret is safe"), false, 1001,
+                           /*whisperMemoryEnabled=*/true),
+              PlayerbotSocialBufferRejection::Accepted);
+
+    buffer.ForgetSpeaker(1);
+
+    ASSERT_EQ(buffer.LineCount(), 1u);
+    EXPECT_EQ(buffer.Lines().front().speakerGuidCounter, 2u);
 }
 
 TEST(PlayerbotSocialExtractionBufferTest, TheOldestLinesGoWhenEitherBoundIsReached)
@@ -393,9 +450,9 @@ TEST(PlayerbotSocialExtractionBufferTest, EveryRejectionHasAStableNameForTheLog)
     // These are counted and logged rather than shown to a player, but a rejection that reads as
     // "unknown" is one nobody can act on when extraction quietly stops producing anything.
     for (PlayerbotSocialBufferRejection rejection :
-         {PlayerbotSocialBufferRejection::Accepted, PlayerbotSocialBufferRejection::WhisperNeverBuffered,
+         {PlayerbotSocialBufferRejection::Accepted, PlayerbotSocialBufferRejection::WhisperMemoryDisabled,
           PlayerbotSocialBufferRejection::EmptyText, PlayerbotSocialBufferRejection::TextTooLong,
-          PlayerbotSocialBufferRejection::SpeakerNotConsented})
+          PlayerbotSocialBufferRejection::SpeakerNotConsented, PlayerbotSocialBufferRejection::UnrecognizedChannel})
     {
         EXPECT_NE(std::string(PlayerbotSocialBufferRejectionName(rejection)), "unknown");
     }
@@ -423,6 +480,18 @@ PlayerbotSocialExtractionBuffer BufferOf(std::initializer_list<PlayerbotSocialBu
 
     return buffer;
 }
+
+// Whisper lines buffered while the switch was ON: the disable-transition fixtures below decide what
+// happens to them at submission time.
+PlayerbotSocialExtractionBuffer WhisperBufferOf(std::initializer_list<PlayerbotSocialBufferedLine> lines)
+{
+    PlayerbotSocialExtractionBuffer buffer;
+    for (PlayerbotSocialBufferedLine const& line : lines)
+        buffer.Offer(PlayerbotSocialChannel::Whisper, line, true, line.atUnixSeconds,
+                     /*whisperMemoryEnabled=*/true);
+
+    return buffer;
+}
 }  // namespace
 
 TEST(PlayerbotSocialExtractionSnapshotTest, ConsentIsRecheckedAtSubmissionRatherThanTrustedFromBufferTime)
@@ -444,6 +513,42 @@ TEST(PlayerbotSocialExtractionSnapshotTest, ConsentIsRecheckedAtSubmissionRather
     ASSERT_EQ(snapshot.lines.size(), 1u) << "the withdrawn speaker and generated bot line stayed out";
     EXPECT_EQ(snapshot.lines.front().text, "good to know") << "the withdrawn speaker's words do not leave";
     EXPECT_EQ(snapshot.subjects, std::vector<uint64>{2u}) << "nor may a memory be about them";
+}
+
+TEST(PlayerbotSocialExtractionSnapshotTest, AWhisperThreadSubmitsNothingWhileWhisperMemoryIsDisabled)
+{
+    /*
+     * The disable transition: these lines were buffered while the switch was on, and the switch is
+     * off by the time the thread goes idle. The snapshot is where submission is decided, so the
+     * refusal here is what guarantees words held under a permission that has since been withdrawn
+     * never reach a provider. The caller clears the buffer after any snapshot attempt, so refusing
+     * is also what erases them.
+     */
+    PlayerbotSocialExtractionBuffer const buffer =
+        WhisperBufferOf({PlayerLine(1, "remember my bank alt is Coppervault", 1000), BotLine(10, "noted", 1001)});
+
+    PlayerbotSocialExtractionSnapshot const snapshot = PlayerbotSocialBuildExtractionSnapshot(
+        buffer, Consenting({1}), 1100, PlayerbotSocialChannel::Whisper, /*whisperMemoryEnabled=*/false);
+
+    EXPECT_FALSE(snapshot.Accepted());
+    EXPECT_EQ(snapshot.refusal, PlayerbotSocialSnapshotRefusal::WhisperMemoryDisabled);
+    EXPECT_TRUE(snapshot.lines.empty());
+    EXPECT_TRUE(snapshot.subjects.empty());
+}
+
+TEST(PlayerbotSocialExtractionSnapshotTest, AWhisperThreadSubmitsUnderConsentWhileWhisperMemoryIsEnabled)
+{
+    PlayerbotSocialExtractionBuffer const buffer =
+        WhisperBufferOf({PlayerLine(1, "remember my bank alt is Coppervault", 1000), BotLine(10, "noted", 1001)});
+
+    PlayerbotSocialExtractionSnapshot const snapshot = PlayerbotSocialBuildExtractionSnapshot(
+        buffer, Consenting({1}), 1100, PlayerbotSocialChannel::Whisper, /*whisperMemoryEnabled=*/true);
+
+    ASSERT_TRUE(snapshot.Accepted());
+    ASSERT_EQ(snapshot.lines.size(), 1u) << "the bot's generated line establishes the holder, not evidence";
+    EXPECT_EQ(snapshot.lines.front().text, "remember my bank alt is Coppervault");
+    EXPECT_EQ(snapshot.subjects, std::vector<uint64>{1u});
+    EXPECT_EQ(snapshot.holderGuidCounter, 10u);
 }
 
 TEST(PlayerbotSocialExtractionSnapshotTest, AThreadNobodyStillConsentsToProducesNothingAtAll)
@@ -656,7 +761,7 @@ TEST(PlayerbotSocialExtractionSnapshotTest, EverySnapshotRefusalHasAStableNameFo
     for (PlayerbotSocialSnapshotRefusal refusal :
          {PlayerbotSocialSnapshotRefusal::Accepted, PlayerbotSocialSnapshotRefusal::NothingBuffered,
           PlayerbotSocialSnapshotRefusal::NoConsentedSpeaker, PlayerbotSocialSnapshotRefusal::UnsafeContent,
-          PlayerbotSocialSnapshotRefusal::NoBotPresent})
+          PlayerbotSocialSnapshotRefusal::NoBotPresent, PlayerbotSocialSnapshotRefusal::WhisperMemoryDisabled})
     {
         EXPECT_NE(std::string(PlayerbotSocialSnapshotRefusalName(refusal)), "unknown");
     }

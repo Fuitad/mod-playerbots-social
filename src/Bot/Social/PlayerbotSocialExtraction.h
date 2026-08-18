@@ -30,9 +30,10 @@
  *
  * Four rules, each enforced here rather than at the call sites:
  *
- * Whispers are never buffered, on any terms. Idle extraction therefore cannot produce a whisper
- * scoped memory, which is a real narrowing of the feature and the right trade: holding private
- * player to player messages in server memory for minutes is not worth a memory.
+ * Whispers are buffered only while the operator's whisper memory switch is on, and then only under
+ * the same per speaker consent as every other surface. The switch arrives as an argument on each
+ * offer rather than being read here, and it defaults to OFF: a caller that never learned about it
+ * keeps the old refusal, so the most private surface fails closed at every un-updated call site.
  *
  * Consent is checked when a line is OFFERED, not when it is submitted. A player who has not
  * consented never has their words in the worldserver's memory at all, and an opt out purges what was
@@ -61,10 +62,11 @@ struct PlayerbotSocialBufferedLine
 enum class PlayerbotSocialBufferRejection : uint8
 {
     Accepted = 0,
-    WhisperNeverBuffered,  // Refused before consent is consulted. The surface decides, not the speaker.
+    WhisperMemoryDisabled,  // The operator's switch is off. Refused before consent is consulted.
     EmptyText,
     TextTooLong,
-    SpeakerNotConsented
+    SpeakerNotConsented,
+    UnrecognizedChannel  // A surface this build does not know cannot have its privacy honoured.
 };
 
 [[nodiscard]] char const* PlayerbotSocialBufferRejectionName(PlayerbotSocialBufferRejection rejection);
@@ -145,9 +147,14 @@ public:
      * has no consent to give. The caller passes it rather than this class asking, because the
      * authoritative answer lives in the manager's fail closed consent state and this unit is
      * deliberately free of it.
+     *
+     * `whisperMemoryEnabled` is the operator's switch for the whisper surface, injected the same
+     * way and for the same reason. It defaults to off so an un-updated caller keeps refusing the
+     * most private surface.
      */
     PlayerbotSocialBufferRejection Offer(PlayerbotSocialChannel channel, PlayerbotSocialBufferedLine line,
-                                         bool speakerConsented, uint64 nowUnixSeconds);
+                                         bool speakerConsented, uint64 nowUnixSeconds,
+                                         bool whisperMemoryEnabled = false);
 
     // Drops every line this character spoke. The other participants' lines stay: they consented, and
     // dropping theirs too would be a second privacy decision taken on their behalf.
@@ -198,9 +205,10 @@ enum class PlayerbotSocialSnapshotRefusal : uint8
 {
     Accepted = 0,
     NothingBuffered,
-    NoConsentedSpeaker,  // Every human has withdrawn, or none was ever eligible.
-    UnsafeContent,       // A surviving line carries a secret or an instruction. Refuses the thread.
-    NoBotPresent         // Nobody was there to remember it. Overhearing is not participating.
+    NoConsentedSpeaker,    // Every human has withdrawn, or none was ever eligible.
+    UnsafeContent,         // A surviving line carries a secret or an instruction. Refuses the thread.
+    NoBotPresent,          // Nobody was there to remember it. Overhearing is not participating.
+    WhisperMemoryDisabled  // A whisper thread whose lines outlived the operator's permission.
 };
 
 [[nodiscard]] char const* PlayerbotSocialSnapshotRefusalName(PlayerbotSocialSnapshotRefusal refusal);
@@ -247,7 +255,8 @@ using PlayerbotSocialExtractionConsent = std::function<bool(uint64 characterGuid
  */
 [[nodiscard]] PlayerbotSocialExtractionSnapshot PlayerbotSocialBuildExtractionSnapshot(
     PlayerbotSocialExtractionBuffer const& buffer, PlayerbotSocialExtractionConsent const& consents,
-    uint64 nowUnixSeconds);
+    uint64 nowUnixSeconds, PlayerbotSocialChannel channel = PlayerbotSocialChannel::General,
+    bool whisperMemoryEnabled = false);
 
 /*
  * The third gate: what may be WRITTEN, out of what the provider sent back.

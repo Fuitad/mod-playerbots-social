@@ -856,6 +856,14 @@ private:
 [[nodiscard]] bool PlayerbotSocialMemoryScopeQueryFor(PlayerbotSocialChannel channel,
                                                       PlayerbotSocialMemoryScopeQuery& query);
 
+// The write-side twin: the surface a line was heard on decides the privacy scope its extracted
+// memory persists with. False for a channel this build does not recognize (fails closed).
+[[nodiscard]] bool PlayerbotSocialPrivacyScopeForChannel(PlayerbotSocialChannel channel,
+                                                         PlayerbotSocialPrivacyScope& scope);
+
+// The reverse mapping extraction telemetry files under; Public collapses to General.
+[[nodiscard]] PlayerbotSocialChannel PlayerbotSocialChannelForPrivacyScope(PlayerbotSocialPrivacyScope scope);
+
 /*
  * Whether a stored scope is inside what a query returns.
  *

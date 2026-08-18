@@ -33,6 +33,10 @@ struct PlayerbotSocialConfigValues
     // logout rather than an occasional hello.
     uint32 socialChatWhisperTargetCooldownSeconds = 3600;
 
+    // Whether whisper conversations may feed idle memory extraction (paraphrase only, under the
+    // speaker's consent). Off restores the absolute rule: whisper text is never buffered at all.
+    bool socialChatWhisperMemoryEnable = true;
+
     // Server-wide provider (LLM sidecar) call ceiling per sliding hour. Zero means no ceiling.
     uint32 socialChatProviderHourlyBudget = 120;
     uint32 socialChatTelemetryRetentionHours = 48;

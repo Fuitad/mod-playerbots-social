@@ -2588,6 +2588,13 @@ TEST(PlayerbotSocialCoordinatorTest, AnExtractionThatWroteNothingIsDistinguishab
     EXPECT_EQ(refused.outcome, PlayerbotSocialEventOutcome::Suppressed);
     EXPECT_EQ(refused.reason, "unsafe_content") << "the refusal names itself, so the feed can be counted by cause";
 
+    // The kill switch's transition case reads by name too: whisper lines buffered while the switch
+    // was on and refused once it is off must be countable in the feed, not silent.
+    attempt.refusal = PlayerbotSocialSnapshotRefusal::WhisperMemoryDisabled;
+    PlayerbotSocialEventDraft const disabled = PlayerbotSocialMakeExtractionEvent(attempt);
+    EXPECT_EQ(disabled.outcome, PlayerbotSocialEventOutcome::Suppressed);
+    EXPECT_EQ(disabled.reason, "whisper_memory_disabled");
+
     attempt.refusal = PlayerbotSocialSnapshotRefusal::Accepted;
     EXPECT_EQ(PlayerbotSocialMakeExtractionEvent(attempt).outcome, PlayerbotSocialEventOutcome::Failed)
         << "asked for, never answered";

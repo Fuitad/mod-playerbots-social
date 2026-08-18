@@ -639,6 +639,52 @@ TEST(PlayerbotSocialStateStoreTest, AnOptedOutCharacterIsNeitherWrittenNorRead)
     EXPECT_EQ(store.RecallMemories({BOT_ONE, SUBJECT}, PlayerbotSocialChannel::General).size(), 1u);
 }
 
+TEST(PlayerbotSocialStateStoreTest, AWhisperMemoryIsRecalledOnlyInWhispersBetweenItsOwnPair)
+{
+    /*
+     * The three isolation properties durable whisper memory depends on, pinned as behavior: the
+     * whisper channel is the only surface that may read a whisper-scoped record, and only for the
+     * exact (bot, subject) pair that formed it. Each assertion fails if the scope lattice in
+     * PlayerbotSocialMemoryScopeQueryFor / PlayerbotSocialMemoryScopeIsWithinQuery regresses.
+     */
+    PlayerbotSocialStateStore store;
+    store.RememberRelationship({BOT_ONE, SUBJECT}, Warm());
+    store.RememberRelationship({BOT_TWO, SUBJECT}, Warm());
+    store.RememberRelationship({BOT_ONE, BOT_TWO}, Warm());
+    ASSERT_EQ(store.RememberMemory(
+                  Memory(BOT_ONE, SUBJECT, PlayerbotSocialPrivacyScope::Whisper, "banks on an alt named Coppervault")),
+              PlayerbotSocialMemoryRejection::None);
+
+    // Recalled where it was formed: the same pair, over whispers.
+    EXPECT_EQ(store.RecallMemories({BOT_ONE, SUBJECT}, PlayerbotSocialChannel::Whisper).size(), 1u);
+
+    // Never over a surface anyone else can hear.
+    EXPECT_TRUE(store.RecallMemories({BOT_ONE, SUBJECT}, PlayerbotSocialChannel::General).empty());
+    EXPECT_TRUE(store.RecallMemories({BOT_ONE, SUBJECT}, PlayerbotSocialChannel::Say).empty());
+    EXPECT_TRUE(store.RecallMemories({BOT_ONE, SUBJECT}, PlayerbotSocialChannel::Party).empty());
+
+    // And never for a different pair, even over whispers: another bot whispering the same person,
+    // or the same bot whispering someone else, formed no such memory.
+    EXPECT_TRUE(store.RecallMemories({BOT_TWO, SUBJECT}, PlayerbotSocialChannel::Whisper).empty());
+    EXPECT_TRUE(store.RecallMemories({BOT_ONE, BOT_TWO}, PlayerbotSocialChannel::Whisper).empty());
+}
+
+TEST(PlayerbotSocialStateStoreTest, ResetErasesWhisperScopedMemoriesToo)
+{
+    // The purge half: "forget me" reaches the most private scope, not just the public ones the
+    // existing reset test exercises.
+    PlayerbotSocialStateStore store;
+    store.RememberRelationship({BOT_ONE, SUBJECT}, Warm());
+    ASSERT_EQ(
+        store.RememberMemory(Memory(BOT_ONE, SUBJECT, PlayerbotSocialPrivacyScope::Whisper, "keeps gold on an alt")),
+        PlayerbotSocialMemoryRejection::None);
+
+    EXPECT_GE(store.ResetCharacter(SUBJECT), 1u);
+
+    store.RememberRelationship({BOT_ONE, SUBJECT}, Warm());
+    EXPECT_TRUE(store.RecallMemories({BOT_ONE, SUBJECT}, PlayerbotSocialChannel::Whisper).empty());
+}
+
 TEST(PlayerbotSocialStateStoreTest, WarmRelationshipsReturnsOnlyPairsAtOrAboveTheFamiliarityFloor)
 {
     PlayerbotSocialStateStore store;
@@ -903,6 +949,42 @@ TEST(PlayerbotSocialPersistenceTest, AChannelSelectsOnlyTheStoredScopesItMayRead
 
     ASSERT_TRUE(PlayerbotSocialMemoryScopeQueryFor(PlayerbotSocialChannel::Whisper, query));
     EXPECT_EQ(query, PlayerbotSocialMemoryScopeQuery::Any);
+}
+
+TEST(PlayerbotSocialPersistenceTest, EveryChannelDerivesTheScopeItsMemoriesAreStoredUnder)
+{
+    /*
+     * The write-side twin of the read lattice above: the surface a line was heard on decides the
+     * privacy scope its extracted memory persists with. General and say are heard by anyone nearby,
+     * a party is a party, and a whisper is a whisper - the derivation that used to be a two-way
+     * ternary in the coordinator, which a new channel value would silently misfile as public.
+     */
+    PlayerbotSocialPrivacyScope scope = PlayerbotSocialPrivacyScope::Party;
+
+    ASSERT_TRUE(PlayerbotSocialPrivacyScopeForChannel(PlayerbotSocialChannel::General, scope));
+    EXPECT_EQ(scope, PlayerbotSocialPrivacyScope::Public);
+
+    ASSERT_TRUE(PlayerbotSocialPrivacyScopeForChannel(PlayerbotSocialChannel::Say, scope));
+    EXPECT_EQ(scope, PlayerbotSocialPrivacyScope::Public);
+
+    ASSERT_TRUE(PlayerbotSocialPrivacyScopeForChannel(PlayerbotSocialChannel::Party, scope));
+    EXPECT_EQ(scope, PlayerbotSocialPrivacyScope::Party);
+
+    ASSERT_TRUE(PlayerbotSocialPrivacyScopeForChannel(PlayerbotSocialChannel::Whisper, scope));
+    EXPECT_EQ(scope, PlayerbotSocialPrivacyScope::Whisper);
+
+    EXPECT_FALSE(PlayerbotSocialPrivacyScopeForChannel(static_cast<PlayerbotSocialChannel>(250), scope));
+}
+
+TEST(PlayerbotSocialPersistenceTest, EveryScopeNamesTheChannelItsTelemetryFilesUnder)
+{
+    // The reverse mapping the extraction telemetry uses. Whisper filing under whisper is what keeps
+    // the Social feed's extraction rows readable per surface.
+    EXPECT_EQ(PlayerbotSocialChannelForPrivacyScope(PlayerbotSocialPrivacyScope::Public),
+              PlayerbotSocialChannel::General);
+    EXPECT_EQ(PlayerbotSocialChannelForPrivacyScope(PlayerbotSocialPrivacyScope::Party), PlayerbotSocialChannel::Party);
+    EXPECT_EQ(PlayerbotSocialChannelForPrivacyScope(PlayerbotSocialPrivacyScope::Whisper),
+              PlayerbotSocialChannel::Whisper);
 }
 
 TEST(PlayerbotSocialPersistenceTest, AnInvalidChannelSelectsNoScopeAtAll)
