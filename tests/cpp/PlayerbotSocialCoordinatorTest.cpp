@@ -193,6 +193,32 @@ TEST(PlayerbotSocialCoordinatorTest, ForgettingConsentPurgesThatSpeakersPromptCo
         << "the shared lifecycle purge used by opt out must remove prompt text immediately";
 }
 
+TEST(PlayerbotSocialCoordinatorTest, AnObservedSpeakersIdentityReachesTheComposedThread)
+{
+    /*
+     * The whole point of carrying identity across the capture seam: by the time a request is
+     * composed the speaker may be logged out, so unless the coordinator copied these values onto
+     * the prompt line as they arrived, the model is told a name and nothing else.
+     */
+    PlayerbotSocialMgr coordinator;
+
+    PlayerbotSocialObservation observation = Saying(GeneralZone(1), 100, false, 1000, "watch the patrol on the left");
+    observation.speakerName = "Klara";
+    observation.speakerIdentity.race = "Troll";
+    observation.speakerIdentity.characterClass = "Rogue";
+    observation.speakerIdentity.level = 23;
+    observation.speakerIdentity.zone = "Durotar";
+
+    PlayerbotSocialThreadHandle const thread = coordinator.Observe(observation);
+    ASSERT_TRUE(thread.valid);
+
+    EXPECT_EQ(coordinator
+                  .ComposeRequestContext(500, StoredPersonality(), 100, PlayerbotSocialChannel::General, "", 1000,
+                                         thread.publicId)
+                  .thread,
+              (std::vector<std::string>{"Klara [Troll Rogue 23, Durotar]: watch the patrol on the left"}));
+}
+
 TEST(PlayerbotSocialCoordinatorTest, ThreadExpiryDestroysItsPromptContext)
 {
     PlayerbotSocialMgr coordinator;
@@ -2728,16 +2754,18 @@ public:
     std::vector<std::vector<std::string>> assessmentThreadLines;
     std::vector<uint64> generationTokens;
     std::vector<uint64> submittedTargets;
+    std::vector<PlayerbotSocialRequestContext> submittedContexts;
 
     bool Submit(uint64 requestToken, uint64 /*botGuidCounter*/, uint64 targetGuidCounter,
                 PlayerbotSocialChannel /*channel*/, std::string const& /*threadPublicId*/,
-                PlayerbotSocialRequestPriority /*priority*/, PlayerbotSocialRequestContext const& /*context*/) override
+                PlayerbotSocialRequestPriority /*priority*/, PlayerbotSocialRequestContext const& context) override
     {
         if (!acceptGeneration)
             return false;
 
         generationTokens.push_back(requestToken);
         submittedTargets.push_back(targetGuidCounter);
+        submittedContexts.push_back(context);
         return true;
     }
 
@@ -2894,6 +2922,54 @@ TEST(PlayerbotSocialCoordinatorTest, RejectedBaseProfileStillOpensAProviderReque
     ASSERT_EQ(result.openedTokens.size(), 1u);
     EXPECT_EQ(provider.generationTokens.size(), 1u);
     coordinator.SetSocialProvider(nullptr);
+}
+
+TEST(PlayerbotSocialCoordinatorTest, TheRequestTellsTheGenerationWhetherTheLineAskedItAnything)
+{
+    /*
+     * The coordinator has always known both of these and has always judged the reply against the
+     * first, silently: an evidence citing answer to a line that asked nothing is dropped after the
+     * generation was paid for. Neither reached the prompt, so a bot overhearing a question aimed at
+     * somebody else had nothing to tell it apart from one aimed at itself, which is the shape of
+     * the 2026-08-12 addressee bleed.
+     */
+    struct Case
+    {
+        char const* line;
+        bool askedQuestion;
+        bool addressedByName;
+        bool expectsAnswer;
+        bool addressedToBot;
+    };
+
+    constexpr Case CASES[] = {
+        {"Barnek, did anyone clear the mine?", true, true, true, true},
+        {"did anyone clear the mine?", true, false, true, false},
+        {"the mine is clear", false, false, false, false},
+    };
+
+    for (Case const& testCase : CASES)
+    {
+        PlayerbotSocialMgr coordinator;
+        RoleplayAssessmentProvider provider;
+        coordinator.SetSocialProvider(&provider);
+        coordinator.ApplyConsentSnapshot(900, false);
+
+        PlayerbotSocialThreadHandle const thread =
+            coordinator.Observe(Saying(GeneralZone(12), 900, true, 1000, testCase.line));
+        PlayerbotSocialActivation activation = RoleplayOpportunity(thread, 1000, testCase.line);
+        activation.candidates.front().askedQuestion = testCase.askedQuestion;
+        activation.candidates.front().addressedByName = testCase.addressedByName;
+        activation.selectionSeed = RoleplaySeedThatAnswers(activation);
+        ASSERT_NE(activation.selectionSeed, 0u) << testCase.line;
+
+        coordinator.Activate(activation, PlayerbotSocialDensityProfile::Normal);
+
+        ASSERT_EQ(provider.submittedContexts.size(), 1u) << testCase.line;
+        EXPECT_EQ(provider.submittedContexts.front().expectsAnswer, testCase.expectsAnswer) << testCase.line;
+        EXPECT_EQ(provider.submittedContexts.front().addressedToBot, testCase.addressedToBot) << testCase.line;
+        coordinator.SetSocialProvider(nullptr);
+    }
 }
 
 TEST(PlayerbotSocialCoordinatorTest, APerceivableStarterCarriesItsAudienceToTheProvider)

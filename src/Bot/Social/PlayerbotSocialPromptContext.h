@@ -41,6 +41,13 @@ struct PlayerbotSocialPromptLine
     uint64 speakerGuidCounter = 0;
     std::string speakerName;
     bool speakerIsHuman = false;
+
+    /*
+     * Who this speaker is, so the rendered thread says "Klara [Troll Rogue 23, Durotar]" rather
+     * than "Klara". Empty components render as absent: a line whose speaker could not be resolved
+     * degrades to the bare name it used to be, never to a guess.
+     */
+    PlayerbotSocialSpeakerIdentity speakerIdentity;
     uint64 atUnixSeconds = 0;
     std::string text;
 };

@@ -124,6 +124,7 @@ struct PlayerbotSocialObservation
     uint64 speakerGuidCounter = 0;
     std::string speakerName;
     bool speakerIsHuman = false;
+    PlayerbotSocialSpeakerIdentity speakerIdentity;
     uint32 zoneId = 0;
     uint64 atUnixSeconds = 0;
 

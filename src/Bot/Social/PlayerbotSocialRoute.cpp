@@ -75,6 +75,19 @@ std::string FactionName(Player const* player)
     return player->GetTeamId() == TEAM_ALLIANCE ? "alliance" : "horde";
 }
 
+PlayerbotSocialSpeakerIdentity SpeakerIdentityOf(Player const* character)
+{
+    PlayerbotSocialSpeakerIdentity identity;
+    if (character == nullptr)
+        return identity;
+
+    identity.race = RaceName(character->getRace());
+    identity.characterClass = ClassName(character->getClass());
+    identity.level = character->GetLevel();
+    identity.zone = AreaName(character->GetZoneId());
+    return identity;
+}
+
 PlayerbotSocialCharacterFacts CaptureCharacterFacts(Player const* character)
 {
     PlayerbotSocialCharacterFacts facts;
@@ -712,6 +725,7 @@ PlayerbotSocialObservation PlayerbotSocialObservationFor(PlayerbotSocialCaptured
     observation.speakerGuidCounter = captured.speakerGuidCounter;
     observation.speakerName = captured.speakerName;
     observation.speakerIsHuman = captured.speakerIsHuman;
+    observation.speakerIdentity = captured.speakerIdentity;
     observation.zoneId = captured.zoneId;
     observation.atUnixSeconds = captured.atUnixSeconds;
     observation.text = captured.text;
@@ -720,6 +734,7 @@ PlayerbotSocialObservation PlayerbotSocialObservationFor(PlayerbotSocialCaptured
 }
 
 PlayerbotSocialObservation PlayerbotSocialDeliveredWhisperObservation(uint64 botGuidCounter, std::string const& botName,
+                                                                      PlayerbotSocialSpeakerIdentity const& botIdentity,
                                                                       uint64 targetGuidCounter,
                                                                       PlayerbotSocialDeliveryRequest const& request,
                                                                       uint64 nowUnixSeconds)
@@ -737,6 +752,7 @@ PlayerbotSocialObservation PlayerbotSocialDeliveredWhisperObservation(uint64 bot
     captured.speakerGuidCounter = botGuidCounter;
     captured.speakerName = botName;
     captured.speakerIsHuman = false;
+    captured.speakerIdentity = botIdentity;
     captured.targetGuidCounter = targetGuidCounter;
     captured.languageId = request.languageId;
     captured.atUnixSeconds = nowUnixSeconds;
@@ -922,6 +938,7 @@ PlayerbotSocialThreadHandle PlayerbotSocialObserveOncePerDispatch(PlayerbotSocia
         group.currentLine.speakerGuidCounter = prepared.speakerGuidCounter;
         group.currentLine.speakerName = prepared.speakerName;
         group.currentLine.speakerIsHuman = prepared.speakerIsHuman;
+        group.currentLine.speakerIdentity = prepared.speakerIdentity;
         group.currentLine.atUnixSeconds = prepared.atUnixSeconds;
         group.currentLine.text = prepared.text;
     }
@@ -1294,7 +1311,8 @@ bool PlayerbotSocialDeliver(Player* bot, Player* target, PlayerbotSocialDelivery
     if (accepted && !prepared.isEmote && prepared.channel == PlayerbotSocialChannel::Whisper && target != nullptr &&
         GET_PLAYERBOT_AI(target) == nullptr && prepared.origin == PlayerbotSocialEventOrigin::Social)
         sPlayerbotSocialMgr.Observe(PlayerbotSocialDeliveredWhisperObservation(
-            bot->GetGUID().GetCounter(), bot->GetName(), target->GetGUID().GetCounter(), prepared, nowUnixSeconds));
+            bot->GetGUID().GetCounter(), bot->GetName(), SpeakerIdentityOf(bot), target->GetGUID().GetCounter(),
+            prepared, nowUnixSeconds));
 
     return accepted;
 }
@@ -2277,6 +2295,10 @@ bool PlayerbotSocialCaptureChat(PlayerbotAI* botAI, PlayerbotSocialInboundDecisi
     // A character driven by the module is a bot however it was created, which is a broader and more
     // accurate test than asking whether its account is one of the random bot accounts.
     captured.speakerIsHuman = GET_PLAYERBOT_AI(speaker) == nullptr;
+
+    // Read here and never again: this is the only place the speaker is a resolved character rather
+    // than a name in a transcript.
+    captured.speakerIdentity = SpeakerIdentityOf(speaker);
 
     captured.languageId = languageId;
     captured.atUnixSeconds = static_cast<uint64>(time(nullptr));

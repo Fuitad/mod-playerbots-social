@@ -150,11 +150,17 @@ void OfferCharacterEvidence(PlayerbotSocialGroundingEnvelope& envelope, Playerbo
                             PlayerbotSocialEvidenceSubjectRole role, bool perceivable,
                             PlayerbotSocialPrivacyScope scope, uint64 nowUnixSeconds)
 {
+    /*
+     * Identity first, and never gated on perception.
+     *
+     * These are the facts /who reports about any character on the realm: nobody has to see someone
+     * to know they are a level 31 gnome rogue in Elwynn Forest. Gating them behind line of sight is
+     * what made a General reply ground on a bare name, and a bot answering a name alone guesses the
+     * class it is talking to. Visibility travels as its own fact below, so the model is still told
+     * it cannot see them.
+     */
     OfferEvidence(envelope, role, character.guidCounter, PlayerbotSocialEvidenceFactKind::Name, character.name,
                   PlayerbotSocialEvidenceProvenance::CurrentWorld, scope, nowUnixSeconds);
-    if (!perceivable)
-        return;
-
     OfferEvidence(envelope, role, character.guidCounter, PlayerbotSocialEvidenceFactKind::Race, character.race,
                   PlayerbotSocialEvidenceProvenance::CurrentWorld, scope, nowUnixSeconds);
     OfferEvidence(envelope, role, character.guidCounter, PlayerbotSocialEvidenceFactKind::CharacterClass,
@@ -167,6 +173,15 @@ void OfferCharacterEvidence(PlayerbotSocialGroundingEnvelope& envelope, Playerbo
                   PlayerbotSocialEvidenceProvenance::CurrentWorld, scope, nowUnixSeconds);
     OfferEvidence(envelope, role, character.guidCounter, PlayerbotSocialEvidenceFactKind::Zone, character.zone,
                   PlayerbotSocialEvidenceProvenance::CurrentWorld, scope, nowUnixSeconds);
+
+    /*
+     * Everything past here is what the character is doing right now, which the bot could only know
+     * by looking at them. An unseen character's exact spot, party, guild, fight, and target are not
+     * things to state as fact.
+     */
+    if (!perceivable)
+        return;
+
     OfferEvidence(envelope, role, character.guidCounter, PlayerbotSocialEvidenceFactKind::Area, character.area,
                   PlayerbotSocialEvidenceProvenance::CurrentWorld, scope, nowUnixSeconds);
     OfferEvidence(envelope, role, character.guidCounter, PlayerbotSocialEvidenceFactKind::GroupRelation,
@@ -1011,6 +1026,84 @@ std::string PlayerbotSocialRenderRelationship(PlayerbotSocialRelationshipValues 
     return BoundedUtf8(std::move(rendered), PLAYERBOT_SOCIAL_CONTEXT_ENTRY_BYTES);
 }
 
+namespace
+{
+/*
+ * The bracketed facts about who is speaking: `[Troll Rogue 23, Durotar]`.
+ *
+ * Every component is optional and an unknown one is simply absent, because a bot answering an
+ * unresolved character must be short of information rather than misinformed. An entirely unknown
+ * speaker produces no bracket at all, which is the bare `Name:` line this thread rendered before.
+ */
+std::string RenderSpeakerIdentity(PlayerbotSocialSpeakerIdentity const& identity)
+{
+    std::string head;
+    auto append = [&head](std::string const& component)
+    {
+        if (component.empty())
+            return;
+        if (!head.empty())
+            head += ' ';
+        head += component;
+    };
+
+    append(identity.race);
+    append(identity.characterClass);
+    if (identity.level != 0)
+        append(std::to_string(identity.level));
+
+    if (head.empty() && identity.zone.empty())
+        return {};
+
+    std::string rendered = " [";
+    rendered += head;
+    if (!identity.zone.empty())
+    {
+        if (!head.empty())
+            rendered += ", ";
+        rendered += identity.zone;
+    }
+    rendered += ']';
+    return rendered;
+}
+
+/*
+ * Who the line was answering, resolved inside the snapshot rather than trusted from anywhere else.
+ * A parent that has aged out of the buffer, or one whose speaker is this line's own speaker, names
+ * nobody: the marker exists to tell a bystander that a question already has an addressee, and a bot
+ * continuing its own turn has not addressed anyone new.
+ */
+std::string RenderAddressee(PlayerbotSocialPromptContextSnapshot const& snapshot, PlayerbotSocialPromptLine const& line)
+{
+    if (line.replyToEventPublicId.empty())
+        return {};
+
+    for (PlayerbotSocialPromptLine const& parent : snapshot.lines)
+    {
+        if (parent.eventPublicId != line.replyToEventPublicId)
+            continue;
+        if (parent.speakerName.empty())
+            return {};
+
+        /*
+         * Same speaker only when the identifier is a real one. Zero means unresolved everywhere in
+         * this feature, so comparing it would make two different unknown speakers one, and drop a
+         * marker that names a genuinely different character. Fall back to the name in that case:
+         * it is what the marker would have printed anyway.
+         */
+        bool const sameSpeaker = parent.speakerGuidCounter != 0 && line.speakerGuidCounter != 0
+                                     ? parent.speakerGuidCounter == line.speakerGuidCounter
+                                     : parent.speakerName == line.speakerName;
+        if (sameSpeaker)
+            return {};
+
+        return " (to " + parent.speakerName + ")";
+    }
+
+    return {};
+}
+}  // namespace
+
 std::vector<std::string> PlayerbotSocialRenderPromptThread(PlayerbotSocialPromptContextSnapshot const& snapshot)
 {
     if (!snapshot.Accepted())
@@ -1027,7 +1120,15 @@ std::vector<std::string> PlayerbotSocialRenderPromptThread(PlayerbotSocialPrompt
         if (speaker.empty())
             speaker = line->speakerIsHuman ? "human" : "bot";
 
-        std::string value = speaker + ": " + line->text;
+        /*
+         * Everything up to and including the colon is written here, from values this module read off
+         * the world. Everything after it is what the speaker typed, rendered verbatim: mangling
+         * speech to defend the notation would corrupt legitimate lines, so the prompt's notation
+         * rule instead confines trust to this prefix. Annotation shaped text a player types lands
+         * after the colon, where the rule says facts do not live.
+         */
+        std::string value = speaker + RenderSpeakerIdentity(line->speakerIdentity) + RenderAddressee(snapshot, *line) +
+                            ": " + line->text;
         value = BoundedUtf8(std::move(value), PLAYERBOT_SOCIAL_CONTEXT_ENTRY_BYTES);
         if (value.empty() || rendered.size() >= PLAYERBOT_SOCIAL_CONTEXT_ENTRIES ||
             bytes + value.size() > PLAYERBOT_SOCIAL_CONTEXT_BYTES)

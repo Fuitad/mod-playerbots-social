@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstddef>
+#include <string>
 #include <string_view>
 
 #include "Define.h"
@@ -161,6 +162,23 @@ enum class PlayerbotSocialIdKind : uint8
 
     return true;
 }
+
+/*
+ * Who a speaker is, read off the live character at the moment the line was captured.
+ *
+ * These are the /who visible facts: what any player in the room can see about the character without
+ * looking at them. They travel with the line rather than being looked up later because the Player
+ * object is resolved only at the capture seam, and because a thread outlives the logout of everyone
+ * in it. Any component may be empty or zero, which means unknown and renders as absent rather than
+ * as a guess.
+ */
+struct PlayerbotSocialSpeakerIdentity
+{
+    std::string race;
+    std::string characterClass;
+    uint32 level = 0;
+    std::string zone;
+};
 
 // Channels and memory privacy ----------------------------------------------------------------------
 

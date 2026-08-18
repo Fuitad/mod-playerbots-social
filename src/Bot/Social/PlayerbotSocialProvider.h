@@ -215,6 +215,25 @@ struct PlayerbotSocialRequestContext
     // The active content expansion the realm's progression policy enforces, supplied by the
     // worldserver so an authorized performance cannot treat later expansion content as available.
     uint8 activeContentExpansion = 0;
+
+    /*
+     * Whether the line being answered asked a question at all.
+     *
+     * The same decision the delivery gate already validates the reply against: an evidence citing
+     * answer to a line that asked nothing is refused as an irrelevant contribution. It travels to
+     * the generation now, so the model is told the rule it will be judged by rather than being left
+     * to guess it and lose the whole generation to a rejection.
+     */
+    bool expectsAnswer = false;
+
+    /*
+     * Whether that line was aimed at THIS bot: a whisper, or a room line that named it.
+     *
+     * The distinction the 2026-08-12 regression turned on. A question asked of somebody else in the
+     * same room is one this bot may react to as a bystander, but may not answer in the addressee's
+     * place, and only the coordinator knows which of the two this is.
+     */
+    bool addressedToBot = false;
 };
 
 /*

@@ -953,6 +953,55 @@ TEST(PlayerbotSocialCaptureTest, ZoneAndGroupContextAreCarriedWhereTheyAreNotThe
     EXPECT_EQ(PlayerbotSocialValidateCapture(general), PlayerbotSocialCaptureRejection::None);
 }
 
+TEST(PlayerbotSocialCaptureTest, ASpeakersIdentityIsNormalizedOntoTheObservationItProduces)
+{
+    /*
+     * The speaker's Player object is live only at the capture seam. Without carrying its identity
+     * across as values, a room addressed reply reaches the model as a bare "Name: text" and the
+     * model cannot know the character it is answering is a rogue, which is how a hunter ends up
+     * recommending a pet to one.
+     */
+    PlayerbotSocialCapturedMessage captured = GeneralCapture();
+    captured.speakerName = "Klara";
+    captured.speakerIdentity.race = "Troll";
+    captured.speakerIdentity.characterClass = "Rogue";
+    captured.speakerIdentity.level = 23;
+    captured.speakerIdentity.zone = "Durotar";
+    captured.text = "you leveling through here or just grinding?";
+
+    PlayerbotSocialObservation const observation = PlayerbotSocialObservationFor(captured);
+
+    EXPECT_EQ(observation.speakerIdentity.race, "Troll");
+    EXPECT_EQ(observation.speakerIdentity.characterClass, "Rogue");
+    EXPECT_EQ(observation.speakerIdentity.level, 23u);
+    EXPECT_EQ(observation.speakerIdentity.zone, "Durotar");
+}
+
+TEST(PlayerbotSocialCaptureTest, ADeliveredWhisperCarriesTheSpeakingBotsOwnIdentity)
+{
+    // The one delivered line with no bot listener to capture it. Its identity has to be supplied by
+    // the delivery seam or the bot's own turns are the only unannotated lines in its own thread.
+    PlayerbotSocialDeliveryRequest reply;
+    reply.channel = PlayerbotSocialChannel::Whisper;
+    reply.origin = PlayerbotSocialEventOrigin::Social;
+    reply.text = "sure, what's up?";
+    reply.eventPublicId = PlayerbotSocialMakeEventPublicId(1005, 668);
+
+    PlayerbotSocialSpeakerIdentity identity;
+    identity.race = "Night Elf";
+    identity.characterClass = "Druid";
+    identity.level = 41;
+    identity.zone = "Ashenvale";
+
+    PlayerbotSocialObservation const delivered =
+        PlayerbotSocialDeliveredWhisperObservation(668, "Alisaie", identity, 661, reply, 1005);
+
+    EXPECT_EQ(delivered.speakerIdentity.race, "Night Elf");
+    EXPECT_EQ(delivered.speakerIdentity.characterClass, "Druid");
+    EXPECT_EQ(delivered.speakerIdentity.level, 41u);
+    EXPECT_EQ(delivered.speakerIdentity.zone, "Ashenvale");
+}
+
 TEST(PlayerbotSocialCaptureTest, EachRejectionReportsItsOwnName)
 {
     struct Case
@@ -1058,7 +1107,7 @@ TEST(PlayerbotSocialScopeTest, ADeliveredWhisperToAHumanRejoinsItsOwnThread)
     reply.replyToEventPublicId = inbound.eventPublicId;
 
     PlayerbotSocialObservation const delivered =
-        PlayerbotSocialDeliveredWhisperObservation(668, "Alisaie", 661, reply, 1005);
+        PlayerbotSocialDeliveredWhisperObservation(668, "Alisaie", {}, 661, reply, 1005);
     EXPECT_EQ(delivered.key.channel, PlayerbotSocialChannel::Whisper);
     EXPECT_FALSE(delivered.speakerIsHuman);
     EXPECT_EQ(delivered.role, PlayerbotSocialPromptLineRole::GeneratedReply);
@@ -1069,7 +1118,8 @@ TEST(PlayerbotSocialScopeTest, ADeliveredWhisperToAHumanRejoinsItsOwnThread)
 
     PlayerbotSocialRequestContext const context = coordinator.ComposeRequestContext(
         668, StoredPersonality(), 661, PlayerbotSocialChannel::Whisper, "", 1010, thread.publicId);
-    EXPECT_EQ(context.thread, (std::vector<std::string>{"Deszy: hey, got a minute?", "Alisaie: sure, what's up?"}))
+    EXPECT_EQ(context.thread,
+              (std::vector<std::string>{"Deszy: hey, got a minute?", "Alisaie (to Deszy): sure, what's up?"}))
         << "the bot's own turn must sit in the transcript between the human's lines";
 }
 

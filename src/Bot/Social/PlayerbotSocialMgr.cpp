@@ -518,6 +518,7 @@ PlayerbotSocialThreadHandle PlayerbotSocialMgr::Observe(PlayerbotSocialObservati
         promptLine.speakerGuidCounter = observation.speakerGuidCounter;
         promptLine.speakerName = observation.speakerName;
         promptLine.speakerIsHuman = observation.speakerIsHuman;
+        promptLine.speakerIdentity = observation.speakerIdentity;
         promptLine.atUnixSeconds = observation.atUnixSeconds;
         promptLine.text = observation.text;
         chosen->promptContext.Offer(observation.key.channel, std::move(promptLine), speakerConsented,
@@ -5608,6 +5609,11 @@ uint64 PlayerbotSocialMgr::BeginSocialRequest(
         botGuidCounter, personality, subjectGuidCounter, channel, starterSubject, nowUnixSeconds, threadPublicId,
         nearby, addressedDirectly, currentLine, statelessDirectReply, promptMode);
     context.grounding = grounding;
+
+    // Both decisions were already made above this call and already govern what the delivery gate
+    // will accept. Carrying them into the context is what lets the generation know the same thing.
+    context.expectsAnswer = expectsAnswer;
+    context.addressedToBot = addressedDirectly;
 
     /*
      * The wire subject the provider validates Participant evidence against. It is the delivery

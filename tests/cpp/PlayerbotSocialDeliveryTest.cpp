@@ -418,8 +418,24 @@ TEST(PlayerbotSocialGroundingTest, BaselineFactsAreTypedBoundedAndOwnedByTheirSu
                             }));
 }
 
-TEST(PlayerbotSocialGroundingTest, InvisibleParticipantFactsAndUnrelatedStateAreOmitted)
+TEST(PlayerbotSocialGroundingTest, AnInvisibleParticipantKeepsWhoTheyAreAndLosesWhatTheyAreDoing)
 {
+    /*
+     * On a zone wide General reply the speaker is usually not in line of sight, and this gate used
+     * to drop every fact about them but their name. That is how a hunter ends up recommending a pet
+     * to a rogue: the model had no way to know. Race, class, level, faction, and zone are what /who
+     * shows any player in the world without looking at anyone, so they are not a perception; combat
+     * state, current area, target, and the party and guild relations are, and they stay gated.
+     */
+    auto participantFact = [](PlayerbotSocialGroundingEnvelope const& envelope,
+                              PlayerbotSocialEvidenceFactKind kind) -> std::string
+    {
+        for (PlayerbotSocialEvidenceEntry const& entry : envelope.entries)
+            if (entry.subjectRole == PlayerbotSocialEvidenceSubjectRole::Participant && entry.factKind == kind)
+                return entry.value;
+        return {};
+    };
+
     PlayerbotSocialGroundingInput input;
     input.nowUnixSeconds = 1000;
     input.bot.guidCounter = 500;
@@ -427,18 +443,85 @@ TEST(PlayerbotSocialGroundingTest, InvisibleParticipantFactsAndUnrelatedStateAre
     input.participant.guidCounter = 900;
     input.participant.name = "Elyse";
     input.participant.visible = false;
+    input.participant.race = "Gnome";
+    input.participant.characterClass = "Rogue";
     input.participant.level = 31;
+    input.participant.faction = "alliance";
+    input.participant.zone = "Elwynn Forest";
+    input.participant.area = "Goldshire";
+    input.participant.groupRelation = "not_same_party";
+    input.participant.guildRelation = "not_same_guild";
+    input.participant.inCombat = true;
     input.participant.visibleTarget = "Forest Spider";
 
     PlayerbotSocialGroundingEnvelope const envelope = PlayerbotSocialBuildGroundingEnvelope(input);
     ASSERT_EQ(envelope.refusal, PlayerbotSocialGroundingRefusal::None);
-    EXPECT_FALSE(std::any_of(envelope.entries.begin(), envelope.entries.end(),
-                             [](PlayerbotSocialEvidenceEntry const& entry)
-                             {
-                                 return entry.subjectRole == PlayerbotSocialEvidenceSubjectRole::Participant &&
-                                        (entry.factKind == PlayerbotSocialEvidenceFactKind::Level ||
-                                         entry.factKind == PlayerbotSocialEvidenceFactKind::Target);
-                             }));
+
+    EXPECT_EQ(participantFact(envelope, PlayerbotSocialEvidenceFactKind::Name), "Elyse");
+    EXPECT_EQ(participantFact(envelope, PlayerbotSocialEvidenceFactKind::Race), "Gnome");
+    EXPECT_EQ(participantFact(envelope, PlayerbotSocialEvidenceFactKind::CharacterClass), "Rogue");
+    EXPECT_EQ(participantFact(envelope, PlayerbotSocialEvidenceFactKind::Level), "31");
+    EXPECT_EQ(participantFact(envelope, PlayerbotSocialEvidenceFactKind::Faction), "alliance");
+    EXPECT_EQ(participantFact(envelope, PlayerbotSocialEvidenceFactKind::Zone), "Elwynn Forest");
+    EXPECT_EQ(participantFact(envelope, PlayerbotSocialEvidenceFactKind::Visibility), "not_visible")
+        << "the model still has to be told it cannot see them";
+
+    EXPECT_EQ(participantFact(envelope, PlayerbotSocialEvidenceFactKind::Area), "");
+    EXPECT_EQ(participantFact(envelope, PlayerbotSocialEvidenceFactKind::GroupRelation), "");
+    EXPECT_EQ(participantFact(envelope, PlayerbotSocialEvidenceFactKind::GuildRelation), "");
+    EXPECT_EQ(participantFact(envelope, PlayerbotSocialEvidenceFactKind::CombatState), "");
+    EXPECT_EQ(participantFact(envelope, PlayerbotSocialEvidenceFactKind::Target), "");
+}
+
+TEST(PlayerbotSocialGroundingTest, TheFullestReplyEnvelopeStillFitsItsEntryAndByteCeilings)
+{
+    /*
+     * Relaxing the gate adds five participant entries to every reply. The envelope refuses rather
+     * than truncates, so crossing a ceiling silences the whole generation instead of shortening it.
+     * This is the widest shape the capture side can actually produce: `CaptureGroundingRelations`
+     * writes the group relation, guild relation, and visible target onto the BOT only, and a
+     * starter contributes exactly one Objective source fact.
+     */
+    PlayerbotSocialGroundingInput input;
+    input.nowUnixSeconds = 1000;
+    input.activeContentExpansion = 2;
+    input.bot.guidCounter = 500;
+    input.bot.name = "Barnek";
+    input.bot.race = "Dwarf";
+    input.bot.characterClass = "Warrior";
+    input.bot.level = 32;
+    input.bot.faction = "alliance";
+    input.bot.zone = "Elwynn Forest";
+    input.bot.area = "Goldshire";
+    input.bot.groupRelation = "same_party";
+    input.bot.guildRelation = "same_guild";
+    input.bot.inCombat = true;
+    input.bot.visibleTarget = "Kobold Miner";
+    input.participant.guidCounter = 900;
+    input.participant.name = "Elyse";
+    input.participant.visible = true;
+    input.participant.inRange = true;
+    input.participant.race = "Gnome";
+    input.participant.characterClass = "Rogue";
+    input.participant.level = 31;
+    input.participant.faction = "alliance";
+    input.participant.zone = "Elwynn Forest";
+    input.participant.area = "Goldshire";
+    input.participant.inCombat = false;
+
+    PlayerbotSocialEvidenceEntry objective;
+    objective.subjectRole = PlayerbotSocialEvidenceSubjectRole::Source;
+    objective.subjectGuidCounter = 500;
+    objective.factKind = PlayerbotSocialEvidenceFactKind::Objective;
+    objective.value = "turned in Wanted: Hogger";
+    objective.provenance = PlayerbotSocialEvidenceProvenance::AuthoritativeSource;
+    objective.atUnixSeconds = 1000;
+    input.sourceFacts.push_back(objective);
+
+    PlayerbotSocialGroundingEnvelope const envelope = PlayerbotSocialBuildGroundingEnvelope(input);
+    ASSERT_EQ(envelope.refusal, PlayerbotSocialGroundingRefusal::None);
+    EXPECT_TRUE(PlayerbotSocialGroundingEnvelopeIsValid(envelope));
+    EXPECT_LE(envelope.entries.size(), PLAYERBOT_SOCIAL_EVIDENCE_MAX_ENTRIES);
 }
 
 TEST(PlayerbotSocialGroundingTest, DuplicateOversizedAndConflictingEvidenceFailClosed)
@@ -3627,6 +3710,196 @@ TEST(PlayerbotSocialRequestContextTest, StatelessDirectReplyUsesNeutralRelations
     EXPECT_EQ(context.fictionalIdentity.request, PlayerbotFictionalIdentityRequest::AgeAndHomeCountry);
     EXPECT_EQ(context.fictionalIdentity.age, 60u);
     EXPECT_FALSE(context.fictionalIdentity.homeCountry.has_value());
+}
+
+TEST(PlayerbotSocialRequestContextTest, AThreadLineNamesItsSpeakersIdentityAndWhoItAnswered)
+{
+    /*
+     * The 2026-08-12 shape: Klara asked Sweatyguest a question and a third bot answered it in the
+     * first person. A continuation responder can only decline to answer in someone else's place if
+     * the transcript says whose place that is, and it can only give class correct advice if the
+     * transcript says what class it is talking to.
+     */
+    PlayerbotSocialPromptContextSnapshot snapshot;
+    snapshot.refusal = PlayerbotSocialPromptContextSnapshotRefusal::Accepted;
+
+    PlayerbotSocialPromptLine opener;
+    opener.eventPublicId = PlayerbotSocialMakeEventPublicId(1000, 700);
+    opener.speakerGuidCounter = 700;
+    opener.speakerName = "Sweatyguest";
+    opener.speakerIsHuman = true;
+    opener.atUnixSeconds = 1000;
+    opener.text = "just got here";
+    snapshot.lines.push_back(opener);
+
+    PlayerbotSocialPromptLine question;
+    question.eventPublicId = PlayerbotSocialMakeEventPublicId(1005, 701);
+    question.replyToEventPublicId = opener.eventPublicId;
+    question.speakerGuidCounter = 701;
+    question.speakerName = "Klara";
+    question.speakerIdentity.race = "Troll";
+    question.speakerIdentity.characterClass = "Rogue";
+    question.speakerIdentity.level = 23;
+    question.speakerIdentity.zone = "Durotar";
+    question.atUnixSeconds = 1005;
+    question.text = "you leveling through here or just grinding?";
+    snapshot.lines.push_back(question);
+
+    std::vector<std::string> const thread = PlayerbotSocialRenderPromptThread(snapshot);
+    ASSERT_EQ(thread.size(), 2u);
+    EXPECT_EQ(thread[0], "Sweatyguest: just got here")
+        << "a line whose speaker was never resolved renders exactly as it always did";
+    EXPECT_EQ(thread[1],
+              "Klara [Troll Rogue 23, Durotar] (to Sweatyguest): you leveling through here or just grinding?");
+}
+
+TEST(PlayerbotSocialRequestContextTest, AnUnknownIdentityComponentIsAbsentFromTheThreadRatherThanGuessed)
+{
+    PlayerbotSocialPromptContextSnapshot snapshot;
+    snapshot.refusal = PlayerbotSocialPromptContextSnapshotRefusal::Accepted;
+
+    // Race and zone only: a level nobody read is zero, and zero is not a level anyone is.
+    PlayerbotSocialPromptLine partial;
+    partial.eventPublicId = PlayerbotSocialMakeEventPublicId(1000, 800);
+    partial.speakerGuidCounter = 800;
+    partial.speakerName = "Barnek";
+    partial.speakerIdentity.race = "Orc";
+    partial.speakerIdentity.zone = "Orgrimmar";
+    partial.atUnixSeconds = 1000;
+    partial.text = "anyone selling copper";
+    snapshot.lines.push_back(partial);
+
+    // Answers a line the buffer no longer holds, so there is nobody to name.
+    PlayerbotSocialPromptLine orphaned;
+    orphaned.eventPublicId = PlayerbotSocialMakeEventPublicId(1005, 801);
+    orphaned.replyToEventPublicId = PlayerbotSocialMakeEventPublicId(900, 802);
+    orphaned.speakerGuidCounter = 801;
+    orphaned.speakerName = "Alisaie";
+    orphaned.speakerIdentity.characterClass = "Druid";
+    orphaned.speakerIdentity.level = 41;
+    orphaned.atUnixSeconds = 1005;
+    orphaned.text = "not me sorry";
+    snapshot.lines.push_back(orphaned);
+
+    // Answers itself, which names nobody new.
+    PlayerbotSocialPromptLine selfReply;
+    selfReply.eventPublicId = PlayerbotSocialMakeEventPublicId(1010, 800);
+    selfReply.replyToEventPublicId = partial.eventPublicId;
+    selfReply.speakerGuidCounter = 800;
+    selfReply.speakerName = "Barnek";
+    selfReply.atUnixSeconds = 1010;
+    selfReply.text = "still looking";
+    snapshot.lines.push_back(selfReply);
+
+    std::vector<std::string> const thread = PlayerbotSocialRenderPromptThread(snapshot);
+    ASSERT_EQ(thread.size(), 3u);
+    EXPECT_EQ(thread[0], "Barnek [Orc, Orgrimmar]: anyone selling copper");
+    EXPECT_EQ(thread[1], "Alisaie [Druid 41]: not me sorry");
+    EXPECT_EQ(thread[2], "Barnek: still looking");
+}
+
+TEST(PlayerbotSocialRequestContextTest, TwoUnresolvedSpeakersAreNotTreatedAsOne)
+{
+    /*
+     * Zero means unresolved throughout this feature, so comparing identifiers alone would make
+     * every unknown speaker the same speaker and silently drop a marker naming a genuinely
+     * different character. The names are what separate them here.
+     */
+    PlayerbotSocialPromptContextSnapshot snapshot;
+    snapshot.refusal = PlayerbotSocialPromptContextSnapshotRefusal::Accepted;
+
+    PlayerbotSocialPromptLine asked;
+    asked.eventPublicId = PlayerbotSocialMakeEventPublicId(1000, 1);
+    asked.speakerName = "Sweatyguest";
+    asked.atUnixSeconds = 1000;
+    asked.text = "anyone got a spare bag";
+    snapshot.lines.push_back(asked);
+
+    PlayerbotSocialPromptLine answered;
+    answered.eventPublicId = PlayerbotSocialMakeEventPublicId(1005, 2);
+    answered.replyToEventPublicId = asked.eventPublicId;
+    answered.speakerName = "Klara";
+    answered.atUnixSeconds = 1005;
+    answered.text = "sending one over";
+    snapshot.lines.push_back(answered);
+
+    std::vector<std::string> const thread = PlayerbotSocialRenderPromptThread(snapshot);
+    ASSERT_EQ(thread.size(), 2u);
+    EXPECT_EQ(thread[1], "Klara (to Sweatyguest): sending one over");
+
+    /*
+     * The mixed case, where only one side of the pair resolved. This is the one that separates
+     * "both identifiers are real" from "either identifier is real": with the latter, a character
+     * continuing its own turn across a line that failed to resolve would be handed a marker
+     * addressed to itself.
+     */
+    PlayerbotSocialPromptLine resolvedOpener;
+    resolvedOpener.eventPublicId = PlayerbotSocialMakeEventPublicId(1000, 700);
+    resolvedOpener.speakerGuidCounter = 700;
+    resolvedOpener.speakerName = "Klara";
+    resolvedOpener.atUnixSeconds = 1000;
+    resolvedOpener.text = "heading to the crossroads";
+
+    PlayerbotSocialPromptLine unresolvedContinuation;
+    unresolvedContinuation.eventPublicId = PlayerbotSocialMakeEventPublicId(1005, 700);
+    unresolvedContinuation.replyToEventPublicId = resolvedOpener.eventPublicId;
+    unresolvedContinuation.speakerGuidCounter = 0;
+    unresolvedContinuation.speakerName = "Klara";
+    unresolvedContinuation.atUnixSeconds = 1005;
+    unresolvedContinuation.text = "anyone want to come";
+
+    PlayerbotSocialPromptContextSnapshot mixed;
+    mixed.refusal = PlayerbotSocialPromptContextSnapshotRefusal::Accepted;
+    mixed.lines.push_back(resolvedOpener);
+    mixed.lines.push_back(unresolvedContinuation);
+
+    std::vector<std::string> const mixedThread = PlayerbotSocialRenderPromptThread(mixed);
+    ASSERT_EQ(mixedThread.size(), 2u);
+    EXPECT_EQ(mixedThread[1], "Klara: anyone want to come")
+        << "one unresolved identifier must fall back to the name, not compare a real guid against zero";
+}
+
+TEST(PlayerbotSocialRequestContextTest, AFullyAnnotatedThreadStillDeliversItsNewestTurn)
+{
+    // Annotation bytes are charged against the same ceilings the bare names were. The newest line
+    // is the one the bot is answering, so it is the one that must never be the casualty.
+    PlayerbotSocialPromptContextSnapshot snapshot;
+    snapshot.refusal = PlayerbotSocialPromptContextSnapshotRefusal::Accepted;
+
+    std::vector<std::string> eventIds;
+    for (std::size_t index = 0; index < PLAYERBOT_SOCIAL_CONTEXT_ENTRIES; ++index)
+        eventIds.push_back(PlayerbotSocialMakeEventPublicId(1000 + index, 900 + index));
+
+    for (std::size_t index = 0; index < PLAYERBOT_SOCIAL_CONTEXT_ENTRIES; ++index)
+    {
+        PlayerbotSocialPromptLine line;
+        line.eventPublicId = eventIds[index];
+        if (index > 0)
+            line.replyToEventPublicId = eventIds[index - 1];
+        line.speakerGuidCounter = 900 + index;
+        line.speakerName = "speaker" + std::to_string(index);
+        line.speakerIdentity.race = "Blood Elf";
+        line.speakerIdentity.characterClass = "Paladin";
+        line.speakerIdentity.level = 70;
+        line.speakerIdentity.zone = "Eversong Woods";
+        line.atUnixSeconds = 1000 + index;
+        line.text = "line " + std::to_string(index) + " of an ordinary conversation about the next pull";
+        snapshot.lines.push_back(std::move(line));
+    }
+
+    std::vector<std::string> const thread = PlayerbotSocialRenderPromptThread(snapshot);
+    ASSERT_FALSE(thread.empty());
+
+    std::size_t threadBytes = 0;
+    for (std::string const& line : thread)
+    {
+        EXPECT_LE(line.size(), PLAYERBOT_SOCIAL_CONTEXT_ENTRY_BYTES);
+        threadBytes += line.size();
+    }
+    EXPECT_LE(threadBytes, PLAYERBOT_SOCIAL_CONTEXT_BYTES);
+    EXPECT_EQ(thread.back(),
+              "speaker11 [Blood Elf Paladin 70, Eversong Woods] (to speaker10): line 11 of an ordinary conversation "
+              "about the next pull");
 }
 
 TEST(PlayerbotSocialRequestContextTest, PromptLinesAndNearbyNamesAreRenderedWithinTheWireBounds)

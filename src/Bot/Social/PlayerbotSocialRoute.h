@@ -230,6 +230,9 @@ struct PlayerbotSocialCapturedMessage
     std::string speakerName;
     bool speakerIsHuman = false;
 
+    // Read off the live speaker here, because nothing downstream can resolve them again.
+    PlayerbotSocialSpeakerIdentity speakerIdentity;
+
     // The addressed character. Set for a whisper, zero everywhere else.
     uint64 targetGuidCounter = 0;
 
@@ -668,8 +671,8 @@ bool PlayerbotSocialDeliver(Player* bot, Player* target, PlayerbotSocialDelivery
  * lands in the thread the human's lines opened.
  */
 [[nodiscard]] PlayerbotSocialObservation PlayerbotSocialDeliveredWhisperObservation(
-    uint64 botGuidCounter, std::string const& botName, uint64 targetGuidCounter,
-    PlayerbotSocialDeliveryRequest const& request, uint64 nowUnixSeconds);
+    uint64 botGuidCounter, std::string const& botName, PlayerbotSocialSpeakerIdentity const& botIdentity,
+    uint64 targetGuidCounter, PlayerbotSocialDeliveryRequest const& request, uint64 nowUnixSeconds);
 
 // The two shapes almost every direct producer needs, so a one line send stays a one line send.
 bool PlayerbotSocialSay(Player* bot, std::string const& text, uint32 languageId, PlayerbotSocialEventOrigin origin);
