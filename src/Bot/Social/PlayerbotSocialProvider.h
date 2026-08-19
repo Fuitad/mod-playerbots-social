@@ -61,6 +61,21 @@ struct PlayerbotSocialContextMemory
 {
     std::string text;
     PlayerbotSocialPrivacyScope scope = PlayerbotSocialPrivacyScope::Public;
+
+    /*
+     * Two identities, and only one of them travels.
+     *
+     * `id` is request local (`m1`, `m2`, ...) and is the name a reply cites, so the model can point
+     * at one memory rather than at remembered text it might paraphrase into something else.
+     * `publicId` is the durable row this memory came from and deliberately never leaves the
+     * worldserver: it is what turns a delivered line back into exactly one stored row for an
+     * operator, and a prompt has no use for a database identity.
+     *
+     * Both follow `text` and `scope` so the brace initialization existing producers already use
+     * keeps meaning what it did.
+     */
+    std::string id;
+    std::string publicId;
 };
 
 enum class PlayerbotSocialMemoryInputState : uint8
@@ -433,6 +448,12 @@ struct PlayerbotSocialProviderResult
     PlayerbotSocialContributionFunction contribution = PlayerbotSocialContributionFunction::None;
     PlayerbotSocialClaimSubject claimSubject = PlayerbotSocialClaimSubject::None;
     std::vector<std::string> citedEvidenceIds;
+    /*
+     * Kept separate from the evidence list all the way through. A memory says what somebody told this
+     * bot earlier; evidence says what the world is now. Merging them would let a stale recollection
+     * stand in for a current fact, which is the one thing this lane must not do.
+     */
+    std::vector<std::string> citedMemoryIds;
 };
 
 /*
@@ -446,10 +467,25 @@ struct PlayerbotSocialProviderResult
 [[nodiscard]] PlayerbotSocialDeliveryRejection PlayerbotSocialValidateOutput(
     PlayerbotSocialProviderResult const& result, PlayerbotSocialChannel requestedChannel);
 
+/*
+ * One memory this request offered, as the coordinator retains it while the answer is outstanding.
+ *
+ * Deliberately not the context entry: there is no `text` here, and the absence is the point. The
+ * paraphrase already has a retention bound of its own, and a second copy kept until the answer lands
+ * would quietly extend it. What the gate needs is only which memories were offered (`id`), what may
+ * be said where (`scope`), and which row to name in telemetry afterwards (`publicId`).
+ */
+struct PlayerbotSocialOfferedMemory
+{
+    std::string id;
+    std::string publicId;
+    PlayerbotSocialPrivacyScope scope = PlayerbotSocialPrivacyScope::Public;
+};
+
 [[nodiscard]] PlayerbotSocialDeliveryRejection PlayerbotSocialValidateGroundedProposal(
     PlayerbotSocialProviderResult const& result, PlayerbotSocialGroundingEnvelope const& originalGrounding,
     PlayerbotSocialGroundingEnvelope const& currentGrounding, PlayerbotSocialChannel requestedChannel,
-    bool expectsAnswer);
+    bool expectsAnswer, std::vector<PlayerbotSocialOfferedMemory> const& offeredMemories = {});
 
 /*
  * The world conditions a delivery depends on, captured on the world thread immediately before the

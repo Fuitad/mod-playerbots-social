@@ -2105,6 +2105,11 @@ void PlayerbotSocialMgr::LoadMemories(uint64 botGuidCounter, PlayerbotSocialChan
                 PlayerbotSocialMemoryRecord record;
                 record.botGuidCounter = botGuidCounter;
 
+                // The row's own identity, which the query has always selected and this loop used to
+                // discard. It is what a cited recollection is reported as, so a delivered line can be
+                // joined back to the one row that supported it.
+                record.publicId = fields[0].Get<std::string>();
+
                 /*
                  * A subject actor that this process cannot name is skipped rather than guessed at. A
                  * NULL subject is legal and means the memory is about no one in particular; a
@@ -2274,6 +2279,11 @@ PlayerbotSocialMemoryRejection PlayerbotSocialMgr::PersistMemory(PlayerbotSocial
     PlayerbotSocialMemoryRecord cachedRecord = record;
     cachedRecord.writeToken = writeToken;
 
+    // Derived once and used twice, below and in the INSERT, so the identity the cache reports for a
+    // memory recalled before any reload is the identity its row is written under, by construction
+    // rather than by two call sites agreeing.
+    cachedRecord.publicId = MakeMemoryPublicId(writeToken, record.botGuidCounter);
+
     // Validation, consent, and storage all happen here, so nothing reaches the statement below that
     // the in-memory store refused.
     PlayerbotSocialMemoryRejection const rejection = _state.RememberMemory(cachedRecord);
@@ -2281,7 +2291,7 @@ PlayerbotSocialMemoryRejection PlayerbotSocialMgr::PersistMemory(PlayerbotSocial
         return rejection;
 
     PlayerbotSocialPreparedStatement* statement = NewPlayerbotSocialStatement(PLAYERBOT_SOCIAL_STMT_INS_MEMORY);
-    statement->SetData(0, MakeMemoryPublicId(writeToken, record.botGuidCounter));
+    statement->SetData(0, cachedRecord.publicId);
     statement->SetData(1, bot->second);
     if (subjectActorId != 0)
         statement->SetData(2, subjectActorId);
@@ -2586,7 +2596,9 @@ std::optional<std::string> PlayerbotSocialSerializeOperatorEvidence(PlayerbotSoc
     if (evidence.citedEvidenceIds.size() > PLAYERBOT_SOCIAL_EVIDENCE_MAX_ENTRIES)
         return std::nullopt;
 
-    bool const hasCitations = !evidence.citedEvidenceIds.empty();
+    // Either list counts, exactly as at the two gates. Otherwise an answer resting on a memory would
+    // render no diagnostics at all, and the telemetry would lose the very exchange it exists to show.
+    bool const hasCitations = !evidence.citedEvidenceIds.empty() || !evidence.citedMemoryPublicIds.empty();
     if ((evidence.contribution == PlayerbotSocialContributionFunction::Answer && !hasCitations) ||
         ((evidence.contribution == PlayerbotSocialContributionFunction::FactFreeBanter ||
           evidence.contribution == PlayerbotSocialContributionFunction::Gesture ||
@@ -2673,6 +2685,13 @@ std::optional<std::string> PlayerbotSocialSerializeOperatorEvidence(PlayerbotSoc
         if (index != 0)
             out += ',';
         AppendJsonString(out, evidence.citedEvidenceIds[index]);
+    }
+    out += "],\"cited_memory_public_ids\":[";
+    for (std::size_t index = 0; index < evidence.citedMemoryPublicIds.size(); ++index)
+    {
+        if (index != 0)
+            out += ',';
+        AppendJsonString(out, evidence.citedMemoryPublicIds[index]);
     }
     out += "]}}";
 
@@ -5657,6 +5676,21 @@ uint64 PlayerbotSocialMgr::BeginSocialRequest(
                 break;
             }
 
+    /*
+     * What this request offered, retained so a citation in the answer can be resolved.
+     *
+     * Ids and scopes and durable row ids only, never the paraphrase: remembered text already has a
+     * retention bound and a second copy held until the answer lands would quietly extend it. The set
+     * is what selection produced, which can be a superset of what the wire carried, because the
+     * serializer sheds trailing memories when the context runs over its byte bound. That is accepted
+     * rather than plumbed back: the widest consequence is a citation naming a real memory of this
+     * pair, in scope for this channel, that the model was not shown.
+     */
+    pending.offeredMemories.reserve(context.memories.size());
+    for (PlayerbotSocialContextMemory const& memory : context.memories)
+        if (!memory.id.empty())
+            pending.offeredMemories.push_back({memory.id, memory.publicId, memory.scope});
+
     if (!_provider->Submit(pending.requestToken, botGuidCounter, wireSubjectGuidCounter, channel, threadPublicId,
                            priority, context))
     {
@@ -5761,6 +5795,17 @@ PlayerbotSocialDeliveryRejection PlayerbotSocialMgr::AcceptSocialResult(Playerbo
     {
         attempt.operatorEvidence->contribution = result.contribution;
         attempt.operatorEvidence->citedEvidenceIds = result.citedEvidenceIds;
+
+        // Resolved to durable ids here, while the offer is still retained. The wire id is meaningless
+        // by the time anyone reads the feed, so recording it instead would be recording nothing.
+        for (std::string const& memoryId : result.citedMemoryIds)
+        {
+            auto const offered = std::find_if(
+                pending->second.offeredMemories.begin(), pending->second.offeredMemories.end(),
+                [&memoryId](PlayerbotSocialOfferedMemory const& candidate) { return candidate.id == memoryId; });
+            if (offered != pending->second.offeredMemories.end() && !offered->publicId.empty())
+                attempt.operatorEvidence->citedMemoryPublicIds.push_back(offered->publicId);
+        }
     }
 
     // Silence is a legitimate answer with nothing to deliver, so the request closes here.
@@ -5864,9 +5909,9 @@ PlayerbotSocialDeliveryRejection PlayerbotSocialMgr::CompleteDelivery(
     }
 
     if (verdict == PlayerbotSocialDeliveryRejection::None)
-        verdict = PlayerbotSocialValidateGroundedProposal(pending->second.result, pending->second.grounding,
-                                                          conditions.currentGrounding, pending->second.channel,
-                                                          pending->second.expectsAnswer);
+        verdict = PlayerbotSocialValidateGroundedProposal(
+            pending->second.result, pending->second.grounding, conditions.currentGrounding, pending->second.channel,
+            pending->second.expectsAnswer, pending->second.offeredMemories);
 
     // Combat is revalidated at delivery time because the fight may have started after the request
     // opened. Keep its existing precedence over generated-content validation.

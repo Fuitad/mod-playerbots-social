@@ -215,6 +215,31 @@ TEST(PlayerbotSocialDeliveryTest, DeliveryEvidenceIsBoundedPublicAndContainsNoIn
     EXPECT_LE(event.diagnosticsJson.size(), PLAYERBOT_SOCIAL_OPERATOR_EVIDENCE_MAX_BYTES);
 }
 
+TEST(PlayerbotSocialDeliveryTest, OperatorEvidenceNamesTheDurableRowARecallRestedOn)
+{
+    /*
+     * A wire id is meaningless by the time anyone reads the feed, because `m1` is a different memory
+     * on the next request. Recording the durable row id is what lets a line the bot actually said be
+     * joined to the one stored memory behind it.
+     *
+     * The same case also proves an answer resting only on a memory still renders diagnostics at all:
+     * the coherence pre-check used to require an evidence citation, so this exchange would have
+     * produced no evidence JSON whatsoever.
+     */
+    std::string const warhorseRow = "mem_" + std::string(32, 'a');
+
+    PlayerbotSocialOperatorEvidence evidence = OperatorEvidence();
+    evidence.contribution = PlayerbotSocialContributionFunction::Answer;
+    evidence.citedEvidenceIds = {};
+    evidence.citedMemoryPublicIds = {warhorseRow};
+
+    std::optional<std::string> const rendered = PlayerbotSocialSerializeOperatorEvidence(evidence);
+
+    ASSERT_TRUE(rendered.has_value()) << "an answer resting only on a memory rendered no diagnostics";
+    EXPECT_NE(rendered->find("\"cited_memory_public_ids\":[\"" + warhorseRow + "\"]"), std::string::npos) << *rendered;
+    EXPECT_NE(rendered->find("\"cited_evidence_ids\":[]"), std::string::npos) << *rendered;
+}
+
 TEST(PlayerbotSocialDeliveryTest, OperatorEvidenceRefusesCitationsOutsideItsGroundingEnvelope)
 {
     PlayerbotSocialOperatorEvidence evidence = OperatorEvidence();
@@ -285,6 +310,81 @@ TEST(PlayerbotSocialDeliveryTest, SilenceIsAnAnswerRatherThanARejection)
 
     EXPECT_EQ(PlayerbotSocialValidateOutput(quiet, PlayerbotSocialChannel::General),
               PlayerbotSocialDeliveryRejection::None);
+}
+
+TEST(PlayerbotSocialDeliveryTest, AClaimMayRestOnACitedMemoryInsteadOfWorldEvidence)
+{
+    /*
+     * The shape the live silence was about. A player asks what they told this bot earlier, and the
+     * answer rests on a stored memory rather than on anything the world can be asked about now.
+     * Before this, a claim without evidence was refused outright, so the only compliant reply left
+     * was silence.
+     */
+    PlayerbotSocialProviderResult recall =
+        Message("You mentioned you only ride your warhorse.", PlayerbotSocialChannel::Whisper);
+    recall.contribution = PlayerbotSocialContributionFunction::Answer;
+    recall.claimSubject = PlayerbotSocialClaimSubject::Participant;
+    recall.citedMemoryIds = {"m1"};
+
+    EXPECT_EQ(PlayerbotSocialValidateOutput(recall, PlayerbotSocialChannel::Whisper),
+              PlayerbotSocialDeliveryRejection::None);
+
+    // Banter still claims nothing, so pointing at a memory as though it did is still refused.
+    PlayerbotSocialProviderResult banter = Message("Quiet night.", PlayerbotSocialChannel::Whisper);
+    banter.contribution = PlayerbotSocialContributionFunction::FactFreeBanter;
+    banter.citedMemoryIds = {"m1"};
+    EXPECT_EQ(PlayerbotSocialValidateOutput(banter, PlayerbotSocialChannel::Whisper),
+              PlayerbotSocialDeliveryRejection::UnsupportedClaim);
+}
+
+TEST(PlayerbotSocialGroundedProposalTest, ACitedMemoryMustBeOneTheRequestOfferedForThisPairAndChannel)
+{
+    /*
+     * The membership half of the guarantee. A citation is only as good as the offer it names, so the
+     * gate resolves it against what this request actually put in front of the model, re-asserts the
+     * privacy scope the memory was learned under, and refuses a memory offered as a claim about the
+     * bot rather than about the person it is talking to.
+     */
+    std::vector<PlayerbotSocialOfferedMemory> const offered = {
+        {"m1", "mem_" + std::string(32, 'a'), PlayerbotSocialPrivacyScope::Whisper},
+        {"m2", "mem_" + std::string(32, 'b'), PlayerbotSocialPrivacyScope::Public},
+    };
+
+    PlayerbotSocialGroundingEnvelope const grounding = Grounding();
+    PlayerbotSocialProviderResult recall =
+        Message("You mentioned you only ride your warhorse.", PlayerbotSocialChannel::Whisper);
+    recall.contribution = PlayerbotSocialContributionFunction::Answer;
+    recall.claimSubject = PlayerbotSocialClaimSubject::Participant;
+    recall.citedMemoryIds = {"m1"};
+
+    EXPECT_EQ(PlayerbotSocialValidateGroundedProposal(recall, grounding, Grounding(), PlayerbotSocialChannel::Whisper,
+                                                      true, offered),
+              PlayerbotSocialDeliveryRejection::None);
+
+    // Never offered. The model cannot have been shown it, so nothing it says about it is grounded.
+    recall.citedMemoryIds = {"m7"};
+    EXPECT_EQ(PlayerbotSocialValidateGroundedProposal(recall, grounding, Grounding(), PlayerbotSocialChannel::Whisper,
+                                                      true, offered),
+              PlayerbotSocialDeliveryRejection::UnknownEvidence);
+
+    // A whisper-scoped memory spoken into a zone is the failure the whole privacy model exists for.
+    recall.citedMemoryIds = {"m1"};
+    EXPECT_EQ(PlayerbotSocialValidateGroundedProposal(recall, grounding, Grounding(), PlayerbotSocialChannel::General,
+                                                      true, offered),
+              PlayerbotSocialDeliveryRejection::EvidenceScopeMismatch);
+
+    // The public one may be spoken anywhere its scope allows.
+    recall.citedMemoryIds = {"m2"};
+    EXPECT_EQ(PlayerbotSocialValidateGroundedProposal(recall, grounding, Grounding(), PlayerbotSocialChannel::General,
+                                                      true, offered),
+              PlayerbotSocialDeliveryRejection::None);
+
+    // A memory is about the person the bot is talking to, never about the bot itself.
+    recall.claimSubject = PlayerbotSocialClaimSubject::CandidateBot;
+    recall.citedMemoryIds = {"m2"};
+    EXPECT_EQ(PlayerbotSocialValidateGroundedProposal(recall, grounding, Grounding(), PlayerbotSocialChannel::General,
+                                                      true, offered),
+              PlayerbotSocialDeliveryRejection::EvidenceSubjectMismatch);
 }
 
 TEST(PlayerbotSocialGroundedProposalTest, CitationsAreRecheckedAgainstCurrentAuthoritativeState)
@@ -3550,6 +3650,65 @@ TEST(PlayerbotSocialRequestContextTest, TheSelectedMemoriesAreBoundedInCountAndI
     EXPECT_FALSE(selected.empty()) << "bounding must not empty the list, only shorten it";
     for (PlayerbotSocialContextMemory const& memory : selected)
         EXPECT_LE(memory.text.size(), PLAYERBOT_SOCIAL_CONTEXT_ENTRY_BYTES);
+}
+
+TEST(PlayerbotSocialRequestContextTest, TheSelectedMemoriesCarryDenseWireIdsAndTheirDurableRowId)
+{
+    /*
+     * A citation names one memory, so the prompt has to offer a name worth citing and the
+     * worldserver has to be able to turn that name back into the row it came from.
+     *
+     * The wire id is dense and follows the order the prompt renders, which is significance first,
+     * because a reply cites what it was shown rather than what was stored first. The durable id
+     * rides alongside it and never reaches the model; it is what lets a delivered line be joined to
+     * exactly one stored row afterwards.
+     */
+    PlayerbotSocialStateStore state;
+    state.SetOptedOut(500, false);
+    state.SetOptedOut(900, false);
+
+    std::string const warhorseRow = "mem_" + std::string(32, 'a');
+    std::string const bankAltRow = "mem_" + std::string(32, 'b');
+    std::string const weaponRow = "mem_" + std::string(32, 'c');
+
+    auto const remember =
+        [&state](std::string const& publicId, std::string const& paraphrase, float significance, uint64 sequence)
+    {
+        PlayerbotSocialMemoryRecord record;
+        record.publicId = publicId;
+        record.botGuidCounter = 500;
+        record.subjectGuidCounter = 900;
+        record.scope = PlayerbotSocialPrivacyScope::Whisper;
+        record.confidence = 0.9f;
+        record.significance = significance;
+        record.paraphrase = paraphrase;
+        record.sourceEventPublicId = PlayerbotSocialMakeEventPublicId(sequence, 900);
+        record.sourceThreadPublicId = "thr_00000000000000000000000000000001";
+        record.sourceKind = PlayerbotSocialMemorySourceKind::HumanObservation;
+        ASSERT_EQ(state.RememberMemory(record), PlayerbotSocialMemoryRejection::None);
+    };
+
+    remember(warhorseRow, "rides only a warhorse", 0.9f, 1);
+    remember(bankAltRow, "keeps a bank alt in Ironforge", 0.5f, 2);
+    remember(weaponRow, "prefers two handed weapons", 0.7f, 3);
+
+    std::vector<PlayerbotSocialContextMemory> const selected =
+        PlayerbotSocialSelectContextMemories(state, {500, 900}, PlayerbotSocialChannel::Whisper);
+
+    ASSERT_EQ(selected.size(), 3u);
+
+    EXPECT_EQ(selected[0].id, "m1");
+    EXPECT_EQ(selected[1].id, "m2");
+    EXPECT_EQ(selected[2].id, "m3");
+
+    // Ordered by significance, not by insertion, so the ids name what the prompt will actually show.
+    EXPECT_NE(selected[0].text.find("warhorse"), std::string::npos);
+    EXPECT_NE(selected[1].text.find("two handed"), std::string::npos);
+    EXPECT_NE(selected[2].text.find("bank alt"), std::string::npos);
+
+    EXPECT_EQ(selected[0].publicId, warhorseRow);
+    EXPECT_EQ(selected[1].publicId, weaponRow);
+    EXPECT_EQ(selected[2].publicId, bankAltRow);
 }
 
 TEST(PlayerbotSocialRequestContextTest, TheRelationshipIsRenderedAndIsEmptyForARoomRatherThanAPerson)

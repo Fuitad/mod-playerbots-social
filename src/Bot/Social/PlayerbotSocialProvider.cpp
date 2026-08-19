@@ -688,15 +688,22 @@ PlayerbotSocialDeliveryRejection PlayerbotSocialValidateOutput(PlayerbotSocialPr
     if (result.text.empty())
         return PlayerbotSocialDeliveryRejection::EmptyOutput;
 
-    if ((result.contribution == PlayerbotSocialContributionFunction::Answer && result.citedEvidenceIds.empty()) ||
+    /*
+     * A claim rests on something cited, and either list satisfies it: evidence for what the world is
+     * now, a memory for what this person said earlier. Before memories could be cited, a claim with
+     * no evidence was refused outright, which left a bot asked about something it had been told with
+     * no legal way to answer at all.
+     */
+    bool const citesSomething = !result.citedEvidenceIds.empty() || !result.citedMemoryIds.empty();
+
+    if ((result.contribution == PlayerbotSocialContributionFunction::Answer && !citesSomething) ||
         (result.contribution == PlayerbotSocialContributionFunction::FactFreeBanter &&
-         (result.claimSubject != PlayerbotSocialClaimSubject::None || !result.citedEvidenceIds.empty())))
+         (result.claimSubject != PlayerbotSocialClaimSubject::None || citesSomething)))
         return PlayerbotSocialDeliveryRejection::UnsupportedClaim;
 
     if (result.contribution == PlayerbotSocialContributionFunction::Gesture ||
         result.contribution == PlayerbotSocialContributionFunction::None ||
-        (result.claimSubject == PlayerbotSocialClaimSubject::None && !result.citedEvidenceIds.empty()) ||
-        (result.claimSubject != PlayerbotSocialClaimSubject::None && result.citedEvidenceIds.empty()))
+        (result.claimSubject == PlayerbotSocialClaimSubject::None) == citesSomething)
         return PlayerbotSocialDeliveryRejection::UnsupportedClaim;
 
     // Checked before the length bound, so a model that returned a scripted exchange is reported as
@@ -710,7 +717,7 @@ PlayerbotSocialDeliveryRejection PlayerbotSocialValidateOutput(PlayerbotSocialPr
 PlayerbotSocialDeliveryRejection PlayerbotSocialValidateGroundedProposal(
     PlayerbotSocialProviderResult const& result, PlayerbotSocialGroundingEnvelope const& originalGrounding,
     PlayerbotSocialGroundingEnvelope const& currentGrounding, PlayerbotSocialChannel requestedChannel,
-    bool expectsAnswer)
+    bool expectsAnswer, std::vector<PlayerbotSocialOfferedMemory> const& offeredMemories)
 {
     if (!PlayerbotSocialGroundingEnvelopeIsValid(originalGrounding))
         return PlayerbotSocialDeliveryRejection::GroundingUnavailable;
@@ -732,8 +739,36 @@ PlayerbotSocialDeliveryRejection PlayerbotSocialValidateGroundedProposal(
     if (!expectsAnswer && result.contribution == PlayerbotSocialContributionFunction::Answer)
         return PlayerbotSocialDeliveryRejection::IrrelevantContribution;
 
-    if ((result.claimSubject == PlayerbotSocialClaimSubject::None) != result.citedEvidenceIds.empty())
+    // Either list satisfies the claim, exactly as in the shape check above, so the two gates cannot
+    // disagree about the same reply.
+    if ((result.claimSubject == PlayerbotSocialClaimSubject::None) !=
+        (result.citedEvidenceIds.empty() && result.citedMemoryIds.empty()))
         return PlayerbotSocialDeliveryRejection::UnsupportedClaim;
+
+    /*
+     * Memory citations, resolved against what this request actually offered.
+     *
+     * A memory is not re-read against current world state the way a `CurrentWorld` fact is, because
+     * it never described the world in the first place: it is what somebody said earlier, and that
+     * does not stop having been said. What is re-asserted is the scope it was learned under, so a
+     * confidence from a whisper cannot be repeated into a zone even if selection ever offered it.
+     */
+    for (std::string const& memoryId : result.citedMemoryIds)
+    {
+        auto const offered = std::find_if(offeredMemories.begin(), offeredMemories.end(),
+                                          [&memoryId](PlayerbotSocialOfferedMemory const& candidate)
+                                          { return candidate.id == memoryId; });
+        if (offered == offeredMemories.end())
+            return PlayerbotSocialDeliveryRejection::UnknownEvidence;
+
+        // A memory is held by the bot ABOUT the person it is talking to, so it can support a claim
+        // about that person and about nobody else, least of all about the bot itself.
+        if (result.claimSubject != PlayerbotSocialClaimSubject::Participant)
+            return PlayerbotSocialDeliveryRejection::EvidenceSubjectMismatch;
+
+        if (!PlayerbotSocialMemoryIsRetrievableInChannel(offered->scope, requestedChannel))
+            return PlayerbotSocialDeliveryRejection::EvidenceScopeMismatch;
+    }
 
     for (std::string const& evidenceId : result.citedEvidenceIds)
     {
@@ -992,11 +1027,20 @@ std::vector<PlayerbotSocialContextMemory> PlayerbotSocialSelectContextMemories(
         PlayerbotSocialContextMemory memory;
         memory.text = BoundedUtf8(record.paraphrase, PLAYERBOT_SOCIAL_CONTEXT_ENTRY_BYTES);
         memory.scope = record.scope;
+        memory.publicId = record.publicId;
 
         // The far side rejects an empty memory entry outright, so a paraphrase bounded away to
         // nothing is dropped here rather than taking the whole context with it.
-        if (!memory.text.empty())
-            selected.push_back(std::move(memory));
+        if (memory.text.empty())
+            continue;
+
+        /*
+         * Numbered over what survived, not over what was considered, so the ids a reply may cite are
+         * dense and match the order the prompt renders. Assigning before the emptiness check would
+         * leave a gap naming an entry the model was never shown.
+         */
+        memory.id = "m" + std::to_string(selected.size() + 1);
+        selected.push_back(std::move(memory));
     }
 
     return selected;

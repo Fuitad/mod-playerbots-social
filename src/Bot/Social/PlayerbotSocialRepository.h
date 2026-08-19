@@ -239,6 +239,10 @@ inline constexpr float PLAYERBOT_SOCIAL_SIGNIFICANCE_MAX = 1.0f;
  */
 struct PlayerbotSocialMemoryRecord
 {
+    // The durable row's own identity, carried so a recalled memory can be named in telemetry. Empty
+    // only for a candidate that has not been through the write path yet, which is why nothing keys
+    // behaviour on it: it identifies a memory, it never decides whether one may be used.
+    std::string publicId;
     uint64 botGuidCounter = 0;
     uint64 subjectGuidCounter = 0;
     // Manager-lifetime identity for one pending write. Zero means the record came from durable storage.

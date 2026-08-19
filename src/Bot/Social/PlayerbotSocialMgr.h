@@ -292,6 +292,15 @@ struct PlayerbotSocialOperatorEvidence
     PlayerbotSocialRolloutStage rolloutStage = PlayerbotSocialRolloutStage::HumanReplies;
     PlayerbotSocialContributionFunction contribution = PlayerbotSocialContributionFunction::None;
     std::vector<std::string> citedEvidenceIds;
+
+    /*
+     * The DURABLE ids of the memories the answer cited, not the request local `mN` the model saw.
+     *
+     * A wire id means nothing once the request is over: `m1` is a different memory on the next
+     * request. The row id is what lets an operator join a line a bot actually said to the one stored
+     * memory it rested on, which is the whole audit trail this lane offers.
+     */
+    std::vector<std::string> citedMemoryPublicIds;
 };
 
 [[nodiscard]] std::optional<std::string> PlayerbotSocialSerializeOperatorEvidence(
@@ -315,6 +324,16 @@ struct PlayerbotSocialPendingDelivery
     std::string replyToEventPublicId;
     std::string sourceEventPublicId;
     PlayerbotSocialGroundingEnvelope grounding;
+
+    /*
+     * The memories this request offered, so a citation in the answer resolves to something real.
+     *
+     * Ids, scopes, and durable row ids only. The paraphrase is deliberately absent: it already has a
+     * retention bound of its own, and holding a second copy until the answer lands would extend that
+     * bound without saying so. Cleaned up with the rest of this struct on every path that ends a
+     * request, exactly as `grounding` is.
+     */
+    std::vector<PlayerbotSocialOfferedMemory> offeredMemories;
     std::optional<PlayerbotSocialOperatorEvidence> operatorEvidence;
     uint64 requestedAtUnixSeconds = 0;
     PlayerbotSocialRequestPriority priority = PlayerbotSocialRequestPriority::Starter;
