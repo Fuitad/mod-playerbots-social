@@ -62,6 +62,13 @@ PlayerbotsSocial.Whisper.TargetCooldownSeconds = 3600
 # reason to decide this deliberately. Default: 1
 PlayerbotsSocial.WhisperMemory.Enable = 1
 
+# Keep each bot on the zone-local chat channels (General, Local Defense) of the zone it is actually
+# standing in, and off every other zone's. Bots join these once at login and nothing moves them, so
+# without this a line said in one zone's General is heard by bots scattered across the world while
+# the bots standing right there are absent. Off leaves memberships untouched, which is the way back
+# if this misbehaves: it takes a config reload rather than a rebuild. Default: 1
+PlayerbotsSocial.ChannelScope.Enable = 1
+
 # Server-wide LLM provider call ceiling per hour, spent as a token bucket (a small burst plus a
 # steady refill) so lively stays steady instead of a burst followed by silence. Requests beyond it
 # are refused with the budget_exhausted reason; only a pathological refusal volume (twenty times

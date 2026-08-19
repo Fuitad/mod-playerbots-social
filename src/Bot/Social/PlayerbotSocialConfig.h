@@ -37,6 +37,12 @@ struct PlayerbotSocialConfigValues
     // speaker's consent). Off restores the absolute rule: whisper text is never buffered at all.
     bool socialChatWhisperMemoryEnable = true;
 
+    // Whether bots have their zone-local channel memberships kept in step with the zone they are
+    // standing in. A kill switch for a feature that mutates channel state for every bot on the
+    // server: turning it off leaves memberships exactly as they are, and needs only a config
+    // reload rather than a rebuild and a worldserver restart.
+    bool socialChatChannelScopeEnable = true;
+
     // Server-wide provider (LLM sidecar) call ceiling per sliding hour. Zero means no ceiling.
     uint32 socialChatProviderHourlyBudget = 120;
     uint32 socialChatTelemetryRetentionHours = 48;

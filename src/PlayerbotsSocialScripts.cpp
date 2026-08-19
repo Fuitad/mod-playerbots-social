@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "Bot/Extension/PlayerbotExtension.h"
+#include "Bot/Social/PlayerbotSocialChannelScope.h"
 #include "Bot/Social/PlayerbotSocialConfig.h"
 #include "Bot/Social/PlayerbotSocialControlWork.h"
 #include "Bot/Social/PlayerbotSocialMgr.h"
@@ -176,6 +177,14 @@ public:
     void OnPlayerUpdateZone(Player* player, uint32 newZone, uint32 /*newArea*/) override
     {
         QueueAmbientStarterSource(player, PlayerbotSocialStarterSourceKind::ZoneArrival, newZone);
+
+        /*
+         * Marked here, reconciled on the world tick. This hook fires at PlayerUpdates.cpp:1305,
+         * inside the window where core's own channel update is skipped because the session is still
+         * loading, so doing the work here would be doing nothing.
+         */
+        if (player != nullptr && PlayerbotSocialChannelScopeAcceptsBot(player))
+            PlayerbotSocialMarkChannelScope(player->GetGUID().GetCounter());
     }
 
     void OnPlayerJustDied(Player* player) override
@@ -328,6 +337,7 @@ public:
         PlayerbotSocialPumpWhisperStarters();
         PlayerbotSocialPumpBiographies(diff);
         PlayerbotSocialDeliverDue();
+        PlayerbotSocialPumpChannelScope(diff);
     }
 
     /*
