@@ -39,6 +39,14 @@ bool ChannelIsZoneLocal(ChatChannelsEntry const* entry)
 }
 }  // namespace
 
+std::size_t PlayerbotSocialCountMembershipsOfChannel(std::vector<PlayerbotSocialChannelMembership> const& current,
+                                                     uint32 channelId)
+{
+    return static_cast<std::size_t>(std::count_if(current.begin(), current.end(),
+                                                  [channelId](PlayerbotSocialChannelMembership const& membership)
+                                                  { return membership.channelId == channelId; }));
+}
+
 PlayerbotSocialChannelReconciliation PlayerbotSocialReconcileZoneChannels(
     std::vector<PlayerbotSocialChannelMembership> const& current, std::vector<std::string> const& expected,
     std::vector<uint32> const& zoneLocalChannelIds)
@@ -139,8 +147,52 @@ PlayerbotSocialChannelScopeReport PlayerbotSocialChannelScopeActivity::TakeRepor
     std::lock_guard<std::mutex> const guard(_lock);
     PlayerbotSocialChannelScopeReport const report = _pending;
     _pending = {};
+
+    // Refilled with the same read that clears the totals, so the sample belongs to the interval it
+    // describes rather than to the process.
+    _diagnosticsUsed = 0;
     return report;
 }
+
+bool PlayerbotSocialChannelScopeActivity::ClaimDiagnosticSlot()
+{
+    // Taken from the drain, which runs on the world tick, but the lock is kept for the same reason
+    // the rest of this class keeps one: nothing here may assume its caller's thread.
+    std::lock_guard<std::mutex> const guard(_lock);
+
+    if (_diagnosticsUsed >= PLAYERBOT_SOCIAL_CHANNEL_SCOPE_DIAGNOSTIC_BUDGET)
+        return false;
+
+    ++_diagnosticsUsed;
+    return true;
+}
+
+namespace
+{
+PlayerbotSocialChannelScopeQueue& ScopeQueue()
+{
+    static PlayerbotSocialChannelScopeQueue queue;
+    return queue;
+}
+
+PlayerbotSocialChannelScopeActivity& ScopeActivity()
+{
+    static PlayerbotSocialChannelScopeActivity activity;
+    return activity;
+}
+
+std::string JoinNames(std::vector<std::string> const& names)
+{
+    std::string joined;
+    for (std::string const& name : names)
+    {
+        if (!joined.empty())
+            joined += ", ";
+        joined += name;
+    }
+    return joined;
+}
+}  // namespace
 
 void PlayerbotSocialLeaveChannelCompletely(Player* bot, Channel* channel)
 {
@@ -240,8 +292,29 @@ std::size_t PlayerbotSocialReconcileBotChannels(Player* bot)
         PlayerbotSocialReconcileZoneChannels(current, expected, zoneLocalChannelIds);
 
     for (std::string const& name : reconciliation.leave)
-        if (Channel* const channel = channelMgr->GetChannel(name, bot, false))
-            PlayerbotSocialLeaveChannelCompletely(bot, channel);
+    {
+        Channel* const channel = channelMgr->GetChannel(name, bot, false);
+        if (channel == nullptr)
+            continue;
+
+        /*
+         * A bounded sample of what is actually being corrected, which the interval totals cannot
+         * express. `held` is the classification: more than one membership of this id means core's
+         * break-on-first-match left a duplicate no zone change can drain, exactly one means the bot
+         * simply holds the wrong zone's channel because an update was skipped. The zone and the
+         * expected set are logged alongside so the pattern across bots is readable without
+         * correlating against anything else.
+         */
+        if (ScopeActivity().ClaimDiagnosticSlot())
+            LOG_INFO("playerbots",
+                     "Social channel scope drift: bot {} in zone \"{}\" held {} membership(s) of channel id {}, "
+                     "leaving \"{}\", expected [{}]",
+                     bot->GetName(), zoneName,
+                     PlayerbotSocialCountMembershipsOfChannel(current, channel->GetChannelId()),
+                     channel->GetChannelId(), name, JoinNames(expected));
+
+        PlayerbotSocialLeaveChannelCompletely(bot, channel);
+    }
 
     for (std::string const& name : reconciliation.join)
     {
@@ -256,21 +329,6 @@ std::size_t PlayerbotSocialReconcileBotChannels(Player* bot)
 
     return reconciliation.leave.size();
 }
-
-namespace
-{
-PlayerbotSocialChannelScopeQueue& ScopeQueue()
-{
-    static PlayerbotSocialChannelScopeQueue queue;
-    return queue;
-}
-
-PlayerbotSocialChannelScopeActivity& ScopeActivity()
-{
-    static PlayerbotSocialChannelScopeActivity activity;
-    return activity;
-}
-}  // namespace
 
 void PlayerbotSocialMarkChannelScope(uint64 botGuidCounter) { ScopeQueue().Mark(botGuidCounter); }
 

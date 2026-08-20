@@ -482,3 +482,61 @@ TEST(PlayerbotSocialChannelScopeTest, AnIntervalThatCorrectedNothingStillReports
     EXPECT_EQ(report.reconciled, 25u);
     EXPECT_EQ(report.corrected, 0u);
 }
+
+/*
+ * The diagnostic sample is bounded per interval rather than per correction.
+ *
+ * The question these lines exist to answer is which shape the drift takes, and a handful of examples
+ * answers it as well as thousands would. Without a bound, the first sweep after a restart could log
+ * a line for every stale membership on the server at once.
+ */
+TEST(PlayerbotSocialChannelScopeTest, TheDiagnosticSampleStopsAtItsBudgetWithinAnInterval)
+{
+    PlayerbotSocialChannelScopeActivity activity;
+
+    std::size_t granted = 0;
+    for (std::size_t attempt = 0; attempt < PLAYERBOT_SOCIAL_CHANNEL_SCOPE_DIAGNOSTIC_BUDGET * 3; ++attempt)
+        if (activity.ClaimDiagnosticSlot())
+            ++granted;
+
+    EXPECT_EQ(granted, PLAYERBOT_SOCIAL_CHANNEL_SCOPE_DIAGNOSTIC_BUDGET);
+}
+
+/*
+ * Refilled by the same read that resets the totals, so the sample tracks the reporting interval
+ * rather than running dry for the life of the process.
+ */
+TEST(PlayerbotSocialChannelScopeTest, TheDiagnosticSampleRefillsWhenTheIntervalReportIsTaken)
+{
+    PlayerbotSocialChannelScopeActivity activity;
+
+    while (activity.ClaimDiagnosticSlot())
+        ;
+    ASSERT_FALSE(activity.ClaimDiagnosticSlot());
+
+    (void)activity.TakeReport();
+
+    EXPECT_TRUE(activity.ClaimDiagnosticSlot());
+}
+
+/*
+ * The classification the diagnostic exists to make.
+ *
+ * Two memberships of one channel id means core's break-on-first-match left a duplicate that no zone
+ * change can drain. One means the bot simply holds the wrong zone's channel, which is a dropped
+ * update rather than an undrainable one. The count is what separates them, so it is what gets
+ * logged, and the two causes lead to different fixes.
+ */
+TEST(PlayerbotSocialChannelScopeTest, MembershipsOfOneChannelAreCountedApartFromOtherChannels)
+{
+    std::vector<PlayerbotSocialChannelMembership> const current = {
+        {"General - Elwynn Forest", SCOPE_GENERAL},
+        {"General - Westfall", SCOPE_GENERAL},
+        {"LocalDefense - Westfall", SCOPE_LOCAL_DEFENSE},
+        {"Trade - City", SCOPE_TRADE},
+    };
+
+    EXPECT_EQ(PlayerbotSocialCountMembershipsOfChannel(current, SCOPE_GENERAL), 2u);
+    EXPECT_EQ(PlayerbotSocialCountMembershipsOfChannel(current, SCOPE_LOCAL_DEFENSE), 1u);
+    EXPECT_EQ(PlayerbotSocialCountMembershipsOfChannel(current, SCOPE_WORLD_DEFENSE), 0u);
+}

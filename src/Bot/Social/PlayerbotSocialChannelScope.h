@@ -33,6 +33,16 @@ constexpr uint32 PLAYERBOT_SOCIAL_CHANNEL_SCOPE_RESCAN_MS = 300000;
 constexpr std::size_t PLAYERBOT_SOCIAL_CHANNEL_SCOPE_PENDING_MAX = 512;
 
 /*
+ * How many stale memberships one reporting interval describes in detail.
+ *
+ * The detail lines exist to answer one question, which shape the drift takes, and a handful of
+ * examples answers it as well as thousands would. The first sweep after a restart sees every stale
+ * membership on the server at once, so an unbounded sample would be a log flood exactly when the
+ * server is busiest.
+ */
+constexpr std::size_t PLAYERBOT_SOCIAL_CHANNEL_SCOPE_DIAGNOSTIC_BUDGET = 8;
+
+/*
  * One zone-local channel a bot currently belongs to.
  *
  * The name is the identity, not the channel object: ChannelMgr keys its map on the name, so one
@@ -50,6 +60,18 @@ struct PlayerbotSocialChannelReconciliation
     std::vector<std::string> leave;
     std::vector<std::string> join;
 };
+
+/*
+ * How many of a bot's memberships belong to one channel id.
+ *
+ * This is the classification the drift diagnostic turns on. Two memberships of a single id means
+ * core's break-on-first-match (PlayerUpdates.cpp:542) left behind a duplicate that no further zone
+ * change can drain. One means the bot merely holds the wrong zone's channel, which is an update that
+ * was dropped rather than one that cannot complete. The two have different causes and different
+ * fixes, and the count is the only thing that separates them from outside.
+ */
+[[nodiscard]] std::size_t PlayerbotSocialCountMembershipsOfChannel(
+    std::vector<PlayerbotSocialChannelMembership> const& current, uint32 channelId);
 
 /*
  * What it takes to make a bot's zone-local memberships exactly those of the zone it is standing in.
@@ -123,12 +145,18 @@ public:
     void Record(std::size_t reconciled, std::size_t corrected);
 
     // Totals since the previous call, which are then cleared: each interval reports its own work
-    // rather than an ever-growing running total.
+    // rather than an ever-growing running total. Also refills the diagnostic sample below, so the
+    // sample tracks the reporting interval rather than running dry for the life of the process.
     [[nodiscard]] PlayerbotSocialChannelScopeReport TakeReport();
+
+    // True at most PLAYERBOT_SOCIAL_CHANNEL_SCOPE_DIAGNOSTIC_BUDGET times per interval. Callers log
+    // a detail line only when it is granted.
+    [[nodiscard]] bool ClaimDiagnosticSlot();
 
 private:
     mutable std::mutex _lock;
     PlayerbotSocialChannelScopeReport _pending;
+    std::size_t _diagnosticsUsed = 0;
 };
 
 class Player;
