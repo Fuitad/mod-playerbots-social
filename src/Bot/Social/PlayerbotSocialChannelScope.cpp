@@ -127,6 +127,21 @@ bool PlayerbotSocialChannelScopeQueue::FullRescanDue(uint32 elapsedMs)
     return true;
 }
 
+void PlayerbotSocialChannelScopeActivity::Record(std::size_t reconciled, std::size_t corrected)
+{
+    std::lock_guard<std::mutex> const guard(_lock);
+    _pending.reconciled += reconciled;
+    _pending.corrected += corrected;
+}
+
+PlayerbotSocialChannelScopeReport PlayerbotSocialChannelScopeActivity::TakeReport()
+{
+    std::lock_guard<std::mutex> const guard(_lock);
+    PlayerbotSocialChannelScopeReport const report = _pending;
+    _pending = {};
+    return report;
+}
+
 void PlayerbotSocialLeaveChannelCompletely(Player* bot, Channel* channel)
 {
     if (bot == nullptr || channel == nullptr)
@@ -249,6 +264,12 @@ PlayerbotSocialChannelScopeQueue& ScopeQueue()
     static PlayerbotSocialChannelScopeQueue queue;
     return queue;
 }
+
+PlayerbotSocialChannelScopeActivity& ScopeActivity()
+{
+    static PlayerbotSocialChannelScopeActivity activity;
+    return activity;
+}
 }  // namespace
 
 void PlayerbotSocialMarkChannelScope(uint64 botGuidCounter) { ScopeQueue().Mark(botGuidCounter); }
@@ -263,14 +284,29 @@ void PlayerbotSocialPumpChannelScope(uint32 diff)
     PlayerbotSocialChannelScopeQueue& queue = ScopeQueue();
 
     /*
-     * The backstop. Marks alone would miss any drift that never announced itself as a zone change,
-     * which is precisely the part of this defect that stayed undiagnosed, so every online bot is
-     * swept on an interval whether or not it was seen to move.
+     * The backstop, and the reporting cadence. Marks alone would miss any drift that never
+     * announced itself as a zone change, which is precisely the part of this defect that stayed
+     * undiagnosed, so every online bot is swept on an interval whether or not it was seen to move.
      */
     if (queue.FullRescanDue(diff))
+    {
         for (auto const& [guid, player] : ObjectAccessor::GetPlayers())
             if (PlayerbotSocialChannelScopeAcceptsBot(player))
                 queue.Mark(guid.GetCounter());
+
+        /*
+         * Emitted every interval, including when nothing needed correcting. Reporting only
+         * corrections meant a converged reconciler and one that never ran looked identical from
+         * outside the process, which left the first live deployment impossible to verify. Zero is
+         * the informative case, so it is the one that must not be suppressed. Once per interval
+         * rather than per tick, because this runs on every world update.
+         */
+        PlayerbotSocialChannelScopeReport const report = ScopeActivity().TakeReport();
+        LOG_INFO("playerbots",
+                 "Social channel scope: swept {} bots and corrected {} stale memberships since the last report, {} "
+                 "pending",
+                 report.reconciled, report.corrected, queue.PendingCount());
+    }
 
     std::size_t corrected = 0;
     std::size_t reconciled = 0;
@@ -291,11 +327,7 @@ void PlayerbotSocialPumpChannelScope(uint32 diff)
         ++reconciled;
     }
 
-    /*
-     * Quiet once converged. A first sweep correcting many and later sweeps correcting none is the
-     * signature that the accumulated backlog was real; a first sweep correcting none refutes it.
-     */
-    if (corrected > 0)
-        LOG_INFO("playerbots", "Social channel scope: removed {} stale memberships across {} bots", corrected,
-                 reconciled);
+    // Accumulated rather than logged here: the drain of one sweep spans several ticks, so per-tick
+    // totals would say nothing about the sweep as a whole.
+    ScopeActivity().Record(reconciled, corrected);
 }

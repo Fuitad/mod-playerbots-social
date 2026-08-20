@@ -104,6 +104,33 @@ private:
     uint32 _sinceRescanMs = 0;
 };
 
+struct PlayerbotSocialChannelScopeReport
+{
+    std::size_t reconciled = 0;
+    std::size_t corrected = 0;
+};
+
+/*
+ * What the reconciler did over one reporting interval.
+ *
+ * It exists so a sweep that corrects nothing is still visible. Reporting only corrections made a
+ * converged server and a reconciler that never ran produce identical silence, which is exactly what
+ * left the first live deployment impossible to verify from outside the process.
+ */
+class PlayerbotSocialChannelScopeActivity
+{
+public:
+    void Record(std::size_t reconciled, std::size_t corrected);
+
+    // Totals since the previous call, which are then cleared: each interval reports its own work
+    // rather than an ever-growing running total.
+    [[nodiscard]] PlayerbotSocialChannelScopeReport TakeReport();
+
+private:
+    mutable std::mutex _lock;
+    PlayerbotSocialChannelScopeReport _pending;
+};
+
 class Player;
 class Channel;
 

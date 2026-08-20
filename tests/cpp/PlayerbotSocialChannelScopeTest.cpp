@@ -447,3 +447,38 @@ TEST_F(PlayerbotSocialChannelScopeReconcileTest, AChannelWhoseNameCannotBeBuiltI
 
     bot->CleanupChannels();
 }
+
+/*
+ * The liveness report. A sweep that corrects nothing must still be visible, because a silent
+ * reconciler and an absent one are otherwise indistinguishable from outside the process: that
+ * ambiguity is what made the first live deployment unverifiable.
+ */
+TEST(PlayerbotSocialChannelScopeTest, TheActivityReportCarriesTotalsAndThenResets)
+{
+    PlayerbotSocialChannelScopeActivity activity;
+
+    activity.Record(10, 3);
+    activity.Record(5, 0);
+
+    PlayerbotSocialChannelScopeReport const first = activity.TakeReport();
+    EXPECT_EQ(first.reconciled, 15u);
+    EXPECT_EQ(first.corrected, 3u);
+
+    // Reset on read, so each interval reports its own work rather than a running total.
+    PlayerbotSocialChannelScopeReport const second = activity.TakeReport();
+    EXPECT_EQ(second.reconciled, 0u);
+    EXPECT_EQ(second.corrected, 0u);
+}
+
+/*
+ * A quiet interval still reports. Zero is the informative case here, not the one to suppress.
+ */
+TEST(PlayerbotSocialChannelScopeTest, AnIntervalThatCorrectedNothingStillReportsWhatItSwept)
+{
+    PlayerbotSocialChannelScopeActivity activity;
+    activity.Record(25, 0);
+
+    PlayerbotSocialChannelScopeReport const report = activity.TakeReport();
+    EXPECT_EQ(report.reconciled, 25u);
+    EXPECT_EQ(report.corrected, 0u);
+}
